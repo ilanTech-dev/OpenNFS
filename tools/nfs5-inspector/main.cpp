@@ -126,6 +126,36 @@ void inspect(const Bytes& b) {
         }
     }
     std::cout << "Recognised article tags: " << recognised << "/" << articleCount << "\n";
+    // Report structural properties without assuming that raw offset fields
+    // have been decoded into absolute addresses.
+    std::size_t increasing = 0, equal = 0, decreasing = 0;
+    std::uint32_t minLength = UINT32_MAX, maxLength = 0;
+    std::uint32_t minOffset = UINT32_MAX, maxOffset = 0;
+    std::uint32_t previousOffset = 0;
+    for (std::size_t i = 0; i < articleCount; ++i) {
+        const auto at = tableStart + i * 16;
+        const auto length = read32le(b, at + 8);
+        const auto offset = read32le(b, at + 12);
+        minLength = std::min(minLength, length);
+        maxLength = std::max(maxLength, length);
+        minOffset = std::min(minOffset, offset);
+        maxOffset = std::max(maxOffset, offset);
+        if (i != 0) {
+            if (offset > previousOffset) ++increasing;
+            else if (offset == previousOffset) ++equal;
+            else ++decreasing;
+        }
+        previousOffset = offset;
+    }
+    if (articleCount > 0) {
+        std::cout << "Raw article length fields: min=" << minLength
+                  << " max=" << maxLength << "\n"
+                  << "Raw article offset fields: min=" << minOffset
+                  << " max=" << maxOffset << "\n"
+                  << "Offset transitions: increasing=" << increasing
+                  << " equal=" << equal << " decreasing=" << decreasing << "\n";
+    }
+
     if (recognised != articleCount)
         throw std::runtime_error("one or more article records have unrecognised identifiers");
 }
