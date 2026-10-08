@@ -429,6 +429,7 @@ int main(int argc, char* argv[]) {
                   << "\nInput size: " << input.size() << "\nCompressed: "
                   << (compressed ? "yes (10 FB)" : "no") << "\n";
         inspect(output);
+        if (argc == 3 && std::string(argv[2]) == "--parts") inspectParts(output);
         if (argc == 4 && std::string(argv[2]) == "--vertices")
             exportVertices(output, std::filesystem::path(argv[3]));
         if (argc == 4 && std::string(argv[2]) == "--dump") {
