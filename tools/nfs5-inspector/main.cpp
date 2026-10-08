@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -160,6 +161,8 @@ void inspect(const Bytes& b) {
         throw std::runtime_error("one or more article records have unrecognised identifiers");
     // CRP offsets are relative to the 16-byte directory record, in 16-byte units.
     std::size_t contiguous = 0, gaps = 0, overlaps = 0, previousEnd = 0;
+    std::map<std::string, std::size_t> partTags;
+    std::size_t partRecords = 0;
     for (std::size_t i = 0; i < articleCount; ++i) {
         const std::size_t at = tableStart + i * 16;
         const std::size_t offsetUnits = read32le(b, at + 12);
@@ -181,7 +184,27 @@ void inspect(const Bytes& b) {
                 std::cout << ' ' << std::hex << std::setfill('0') << std::setw(2) << unsigned(b[j]);
             std::cout << std::dec << "\n";
         }
+        // Each article block appears to consist of 16-byte part descriptors.
+        // Classify their two-byte tag field at offsets +2/+3, without
+        // interpreting payload offsets or assuming the geometry is valid.
+        for (std::size_t record = begin; record < end; record += 16) {
+            const std::string tag{
+                static_cast<char>(b[record + 2]),
+                static_cast<char>(b[record + 3])
+            };
+            ++partTags[tag];
+            ++partRecords;
+        }
         previousEnd = end;
+    }
+    std::cout << "Article part descriptors: " << partRecords << "\\n";
+    std::cout << "Part tag frequencies (raw byte order):\\n";
+    for (const auto& [tag, count] : partTags) {
+        std::cout << "  ";
+        for (unsigned char c : tag)
+            if (c >= 32 && c <= 126) std::cout << static_cast<char>(c);
+            else std::cout << "?";
+        std::cout << ": " << count << "\\n";
     }
     std::cout << "Block transitions: contiguous=" << contiguous
               << " gaps=" << gaps << " overlaps=" << overlaps << "\n";
