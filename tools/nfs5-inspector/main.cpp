@@ -240,10 +240,8 @@ int main(int argc, char* argv[]) {
             const std::filesystem::path destination(argv[3]);
             if (std::filesystem::exists(destination))
                 throw std::runtime_error("output path already exists; refusing to overwrite");
-            // Reserve the destination exclusively so a concurrent process cannot
-            // replace an existing file between checking and opening it.
-            // std::ofstream cannot enforce O_EXCL portably; reject existing paths
-            // and leave race-hardening to a subsequent platform-specific change.
+            // Refuse a pre-existing file. This is a convenience guard, not an
+            // atomic no-clobber guarantee; use a private local output directory.
             std::ofstream out(destination, std::ios::binary | std::ios::out);
             if (!out) throw std::runtime_error("cannot open output file");
             out.write(reinterpret_cast<const char*>(output.data()),
@@ -253,7 +251,7 @@ int main(int argc, char* argv[]) {
                 std::filesystem::remove(destination);
                 throw std::runtime_error("failed writing decoded file");
             }
-            std::cout << "Wrote decompressed data to " << destination << "\\n";
+            std::cout << "Wrote decompressed data to " << destination << "\n";
         }
         return 0;
     } catch (const std::exception& e) {
