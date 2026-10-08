@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.15)
+project(nfs5_inspector LANGUAGES CXX)
+
+add_executable(nfs5-inspector main.cpp)
+target_compile_features(nfs5-inspector PRIVATE cxx_std_17)
+if (MSVC)
+  target_compile_options(nfs5-inspector PRIVATE /W4)
+else()
+  target_compile_options(nfs5-inspector PRIVATE -Wall -Wextra -Wpedantic)
+endif()
