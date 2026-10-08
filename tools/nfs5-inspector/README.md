@@ -1,18 +1,17 @@
-# NFS5 CRP inspector (initial probe)
+# NFS5 CRP inspector
 
-This standalone read-only diagnostic utility prints file size, a short hex prefix and offsets/counts of possible CRP container markers. It does **not** decompress CRP files, validate the file format, extract textures or parse geometry. A marker occurrence does not necessarily establish a valid header.
+A read-only standalone tool for NFS5 PC CRP files. It supports the `10 FB` compressed wrapper using bounded LZ77-style decompression derived from the legacy LibOpenNFS algorithm. No proprietary files are written.
 
-Build independently from the main engine:
+Reports input/decompressed sizes, header identifier, candidate article count, miscellaneous count, and article-table-offset field. **Does not** yet parse geometry or validate complete CRP table structure.
+
+From the repository root:
 
 ```bash
+git pull --ff-only origin feature/nfs5-prototype
 cmake -S tools/nfs5-inspector -B build/nfs5-inspector -G Ninja
 cmake --build build/nfs5-inspector
-```
-
-From the OpenNFS repository root, run against **your own** installation:
-
-```bash
+./build/nfs5-inspector/nfs5-inspector --self-test
 ./build/nfs5-inspector/nfs5-inspector resources/NFS_5/gamedata/CarModel/993.crp
 ```
 
-No proprietary assets should be committed or uploaded. The tool limits input files to 64 MiB. Future work: inspect the CRP compression wrapper, safely decode the inner container, then expose geometry counts.
+Both compressed and decompressed buffers are limited to 64 MiB. Keep all original EA files outside Git. Next: validate the CRP article table and extract mesh metadata.
