@@ -384,6 +384,52 @@ void inspectParts(const Bytes& b) {
     }
 }
 
+
+void inspectPolygons(const Bytes& b, std::size_t articleIndex) {
+    if (b.size() < 16) throw std::runtime_error("CRP header too short");
+    const std::size_t count = read32le(b, 4) >> 5;
+    const std::size_t directory = std::size_t(read32le(b, 12)) * 16;
+    if (directory > b.size() || count > (b.size() - directory) / 16 || articleIndex >= count)
+        throw std::runtime_error("article index outside directory");
+    const std::size_t at = directory + articleIndex * 16;
+    const std::size_t relative = read32le(b, at + 12);
+    const std::size_t length = read32le(b, at + 8);
+    if (relative > (b.size() - at) / 16) throw std::runtime_error("article offset outside file");
+    const std::size_t begin = at + relative * 16;
+    if (length > (b.size() - begin) / 16) throw std::runtime_error("article length outside file");
+    const std::size_t end = begin + length * 16;
+    std::cout << "Polygon descriptor probe article=" << articleIndex
+              << " (Body=5 in 993.crp)\n";
+    std::size_t found = 0;
+    for (std::size_t p = begin; p < end; p += 16) {
+        if (b[p+2] != 'r' || b[p+3] != 'p') continue;
+        ++found;
+        const std::size_t payloadBytes = read32le(b, p+4) >> 8;
+        const std::size_t entryCount = read32le(b, p+8);
+        const std::size_t payloadRelative = read32le(b, p+12);
+        const bool valid = payloadRelative <= b.size()-p &&
+                           payloadBytes <= b.size()-p-payloadRelative;
+        const unsigned info = unsigned(b[p]) | (unsigned(b[p+1]) << 8);
+        std::cout << "rp[" << found-1 << "] descriptor=" << p
+                  << " partInfo=0x" << std::hex << info << std::dec
+                  << " level=" << ((info & 0xF0u) >> 4)
+                  << " subindex=" << (info & 0xFu)
+                  << " countField=" << entryCount
+                  << " payloadBytes=" << payloadBytes
+                  << " payloadOffset=" << (valid ? p+payloadRelative : 0)
+                  << " inRange=" << (valid ? "yes" : "no") << "\n";
+        if (valid && payloadBytes > 0) {
+            std::cout << "  prefix:";
+            const auto n = std::min<std::size_t>(payloadBytes, 32);
+            for (std::size_t j = 0; j < n; ++j)
+                std::cout << ' ' << std::hex << std::setfill('0')
+                          << std::setw(2) << unsigned(b[p+payloadRelative+j]);
+            std::cout << std::dec << "\n";
+        }
+    }
+    std::cout << "Polygon descriptors in article: " << found << "\n";
+}
+
 bool selfTest() {
     auto test = [](const Bytes& input, const Bytes& expected) {
         bool compressed = false;
@@ -412,8 +458,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file>] | --self-test\n";
+    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -433,6 +479,13 @@ int main(int argc, char* argv[]) {
                   << (compressed ? "yes (10 FB)" : "no") << "\n";
         inspect(output);
         if (argc == 3 && std::string(argv[2]) == "--parts") inspectParts(output);
+        if (argc == 4 && std::string(argv[2]) == "--polygons") {
+            const std::string arg(argv[3]);
+            std::size_t consumed = 0;
+            const auto idx = std::stoull(arg, &consumed, 10);
+            if (consumed != arg.size()) throw std::runtime_error("invalid article index");
+            inspectPolygons(output, static_cast<std::size_t>(idx));
+        }
         if (argc == 4 && (std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0"))
             exportVertices(output, std::filesystem::path(argv[3]), std::string(argv[2]) == "--vertices-level0");
         if (argc == 4 && std::string(argv[2]) == "--dump") {
