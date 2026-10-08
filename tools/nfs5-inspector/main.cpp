@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -163,7 +165,7 @@ void inspect(const Bytes& b) {
     std::size_t contiguous = 0, gaps = 0, overlaps = 0, previousEnd = 0;
     std::map<std::string, std::size_t> partTags;
     std::size_t partRecords = 0;
-    std::size_t vertexShown = 0, vertexCandidates = 0, vertexValid = 0;
+    std::size_t vertexShown = 0, vertexCandidates = 0, vertexValid = 0, stride16 = 0;
     for (std::size_t i = 0; i < articleCount; ++i) {
         const std::size_t at = tableStart + i * 16;
         const std::size_t offsetUnits = read32le(b, at + 12);
@@ -206,27 +208,44 @@ void inspect(const Bytes& b) {
                 const bool inRange = offset <= b.size() - record &&
                     payloadLength <= b.size() - (record + offset);
                 if (inRange) ++vertexValid;
+                if (count > 0 && count <= SIZE_MAX / 16 && payloadLength == count * 16) ++stride16;
                 if (vertexShown++ < 8) {
                     std::cout << "Vertex candidate[" << (vertexShown - 1)
                               << "] article=" << i << " descriptor=" << record
                               << " payloadOffset=" << (inRange ? record + offset : 0)
                               << " payloadBytes=" << payloadLength
                               << " elementCount=" << count
-                              << " inRange=" << (inRange ? "yes" : "no") << "\\n";
+                              << " inRange=" << (inRange ? "yes" : "no") << "\n";
+                    if (inRange && count && payloadLength >= 16) {
+                        const auto start = record + offset;
+                        auto asFloat = [&](std::size_t at) {
+                            const std::uint32_t bits = read32le(b, at);
+                            float result;
+                            std::memcpy(&result, &bits, sizeof(result));
+                            return result;
+                        };
+                        const float x = asFloat(start), y = asFloat(start+4);
+                        const float z = asFloat(start+8), w = asFloat(start+12);
+                        std::cout << "  candidate float32 xyzw: " << x << ", " << y
+                                  << ", " << z << ", " << w
+                                  << " finite=" << ((std::isfinite(x) && std::isfinite(y) &&
+                                      std::isfinite(z) && std::isfinite(w)) ? "yes" : "no") << "\n";
+                    }
                 }
             }
         }
         previousEnd = end;
     }
-    std::cout << "Vertex payload candidates in range: " << vertexValid << "/" << vertexCandidates << "\\n";
-    std::cout << "Article part descriptors: " << partRecords << "\\n";
-    std::cout << "Part tag frequencies (raw byte order):\\n";
+    std::cout << "Vertex payload candidates in range: " << vertexValid << "/" << vertexCandidates << "\n";
+    std::cout << "Vertex descriptors with 16-byte stride: " << stride16 << "/" << vertexCandidates << "\n";
+    std::cout << "Article part descriptors: " << partRecords << "\n";
+    std::cout << "Part tag frequencies (raw byte order):\n";
     for (const auto& [tag, count] : partTags) {
         std::cout << "  ";
         for (unsigned char c : tag)
             if (c >= 32 && c <= 126) std::cout << static_cast<char>(c);
             else std::cout << "?";
-        std::cout << ": " << count << "\\n";
+        std::cout << ": " << count << "\n";
     }
     std::cout << "Block transitions: contiguous=" << contiguous
               << " gaps=" << gaps << " overlaps=" << overlaps << "\n";
