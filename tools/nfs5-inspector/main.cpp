@@ -102,6 +102,32 @@ void inspect(const Bytes& b) {
               << "Article count (header >> 5): " << (header >> 5) << "\n"
               << "Misc entries: " << misc << "\n"
               << "Article table offset field: " << table << "\n";
+    // Legacy CRP header describes a 16-byte article record table.
+    // For known car files the table offset field is in 16-byte units.
+    const std::size_t tableStart = std::size_t(table) * 16;
+    const std::size_t articleCount = header >> 5;
+    if (tableStart > b.size() || articleCount > (b.size() - tableStart) / 16)
+        throw std::runtime_error("article table exceeds decoded buffer");
+    std::cout << "Article table byte offset: " << tableStart << "\n";
+    std::size_t recognised = 0;
+    for (std::size_t i = 0; i < articleCount; ++i) {
+        const std::size_t at = tableStart + i * 16;
+        const std::string tag(b.begin() + static_cast<std::ptrdiff_t>(at),
+                              b.begin() + static_cast<std::ptrdiff_t>(at + 4));
+        if (tag == "itrA" || tag == "Arti") ++recognised;
+        // Printed fields are raw until we verify their units/semantics.
+        if (i < 8) {
+            std::cout << "Article[" << i << "] @" << at
+                      << " tag='" << tag << "' header=0x"
+                      << std::hex << read32le(b, at + 4)
+                      << " lengthField=0x" << read32le(b, at + 8)
+                      << " offsetField=0x" << read32le(b, at + 12)
+                      << std::dec << "\n";
+        }
+    }
+    std::cout << "Recognised article tags: " << recognised << "/" << articleCount << "\n";
+    if (recognised != articleCount)
+        throw std::runtime_error("one or more article records have unrecognised identifiers");
 }
 
 bool selfTest() {
