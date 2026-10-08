@@ -216,8 +216,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> | --self-test\n";
+    if (argc != 2 && !(argc == 4 && std::string(argv[2]) == "--dump")) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file>] | --self-test\n";
         return 2;
     }
     try {
@@ -236,6 +236,25 @@ int main(int argc, char* argv[]) {
                   << "\nInput size: " << input.size() << "\nCompressed: "
                   << (compressed ? "yes (10 FB)" : "no") << "\n";
         inspect(output);
+        if (argc == 4) {
+            const std::filesystem::path destination(argv[3]);
+            if (std::filesystem::exists(destination))
+                throw std::runtime_error("output path already exists; refusing to overwrite");
+            // Reserve the destination exclusively so a concurrent process cannot
+            // replace an existing file between checking and opening it.
+            // std::ofstream cannot enforce O_EXCL portably; reject existing paths
+            // and leave race-hardening to a subsequent platform-specific change.
+            std::ofstream out(destination, std::ios::binary | std::ios::out);
+            if (!out) throw std::runtime_error("cannot open output file");
+            out.write(reinterpret_cast<const char*>(output.data()),
+                      static_cast<std::streamsize>(output.size()));
+            out.close();
+            if (!out) {
+                std::filesystem::remove(destination);
+                throw std::runtime_error("failed writing decoded file");
+            }
+            std::cout << "Wrote decompressed data to " << destination << "\\n";
+        }
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Inspector error: " << e.what() << "\n";
