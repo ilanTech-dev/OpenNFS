@@ -412,8 +412,9 @@ void inspectPolygons(const Bytes& b, std::size_t articleIndex) {
         const unsigned info = unsigned(b[p]) | (unsigned(b[p+1]) << 8);
         std::cout << "rp[" << found-1 << "] descriptor=" << p
                   << " partInfo=0x" << std::hex << info << std::dec
-                  << " level=" << ((info & 0xF0u) >> 4)
-                  << " subindex=" << (info & 0xFu)
+                  << " levelCandidate=" << ((info >> 12) & 0xFu)
+                  << " partGroupCandidate=" << ((info >> 12) & 0xFu)
+                  << " subindexCandidate=" << (info & 0xFu)
                   << " countField=" << entryCount
                   << " payloadBytes=" << payloadBytes
                   << " payloadOffset=" << (valid ? p+payloadRelative : 0)
@@ -433,6 +434,22 @@ void inspectPolygons(const Bytes& b, std::size_t articleIndex) {
                           << " indexCount=" << indexCount
                           << " streamStart=" << streamStart
                           << " streamFits=" << (streamSafe ? "yes" : "no") << "\n";
+                if (streamSafe && indexCount >= 1 && entryCount >= 3) {
+                    const std::size_t indexData = base + streamStart;
+                    std::uint8_t maximum = 0, minimum = 255;
+                    for (std::size_t j = 0; j < entryCount; ++j) {
+                        maximum = std::max(maximum, b[indexData+j]);
+                        minimum = std::min(minimum, b[indexData+j]);
+                    }
+                    std::cout << "  Vertex index range: " << unsigned(minimum)
+                              << ".." << unsigned(maximum)
+                              << " sample triangles:";
+                    for (std::size_t j = 0; j+2 < std::min<std::size_t>(entryCount, 9); j+=3)
+                        std::cout << " (" << unsigned(b[indexData+j]) << ","
+                                  << unsigned(b[indexData+j+1]) << ","
+                                  << unsigned(b[indexData+j+2]) << ")";
+                    std::cout << "\n";
+                }
                 if (streamSafe && indexCount <= 8) {
                     for (std::size_t stream=0; stream<indexCount; ++stream) {
                         const std::size_t d = base + 48 + infoCount*16 + stream*8;
