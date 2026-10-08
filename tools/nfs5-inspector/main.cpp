@@ -163,6 +163,7 @@ void inspect(const Bytes& b) {
     std::size_t contiguous = 0, gaps = 0, overlaps = 0, previousEnd = 0;
     std::map<std::string, std::size_t> partTags;
     std::size_t partRecords = 0;
+    std::size_t vertexShown = 0, vertexCandidates = 0, vertexValid = 0;
     for (std::size_t i = 0; i < articleCount; ++i) {
         const std::size_t at = tableStart + i * 16;
         const std::size_t offsetUnits = read32le(b, at + 12);
@@ -194,9 +195,30 @@ void inspect(const Bytes& b) {
             };
             ++partTags[tag];
             ++partRecords;
+            if (tag == "tv") {
+                ++vertexCandidates;
+                // Legacy VERTEX_PART descriptor uses lengthInfo >> 8 as bytes,
+                // an element count at +8, and a record-relative byte offset at +12.
+                const std::uint32_t rawLength = read32le(b, record + 4);
+                const std::size_t payloadLength = rawLength >> 8;
+                const std::size_t count = read32le(b, record + 8);
+                const std::size_t offset = read32le(b, record + 12);
+                const bool inRange = offset <= b.size() - record &&
+                    payloadLength <= b.size() - (record + offset);
+                if (inRange) ++vertexValid;
+                if (vertexShown++ < 8) {
+                    std::cout << "Vertex candidate[" << (vertexShown - 1)
+                              << "] article=" << i << " descriptor=" << record
+                              << " payloadOffset=" << (inRange ? record + offset : 0)
+                              << " payloadBytes=" << payloadLength
+                              << " elementCount=" << count
+                              << " inRange=" << (inRange ? "yes" : "no") << "\\n";
+                }
+            }
         }
         previousEnd = end;
     }
+    std::cout << "Vertex payload candidates in range: " << vertexValid << "/" << vertexCandidates << "\\n";
     std::cout << "Article part descriptors: " << partRecords << "\\n";
     std::cout << "Part tag frequencies (raw byte order):\\n";
     for (const auto& [tag, count] : partTags) {
