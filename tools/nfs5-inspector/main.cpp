@@ -158,6 +158,34 @@ void inspect(const Bytes& b) {
 
     if (recognised != articleCount)
         throw std::runtime_error("one or more article records have unrecognised identifiers");
+    // CRP offsets are relative to the 16-byte directory record, in 16-byte units.
+    std::size_t contiguous = 0, gaps = 0, overlaps = 0, previousEnd = 0;
+    for (std::size_t i = 0; i < articleCount; ++i) {
+        const std::size_t at = tableStart + i * 16;
+        const std::size_t offsetUnits = read32le(b, at + 12);
+        const std::size_t lengthUnits = read32le(b, at + 8);
+        if (offsetUnits > (b.size() - at) / 16)
+            throw std::runtime_error("article block offset outside file");
+        const std::size_t begin = at + 16 * offsetUnits;
+        if (lengthUnits > (b.size() - begin) / 16)
+            throw std::runtime_error("article block length outside file");
+        const std::size_t end = begin + 16 * lengthUnits;
+        if (i) {
+            if (begin == previousEnd) ++contiguous;
+            else if (begin > previousEnd) ++gaps;
+            else ++overlaps;
+        }
+        if (i < 8) {
+            std::cout << "Block[" << i << "] begin=" << begin << " end=" << end << " prefix:";
+            for (std::size_t j = begin; j < std::min(begin + 16, end); ++j)
+                std::cout << ' ' << std::hex << std::setfill('0') << std::setw(2) << unsigned(b[j]);
+            std::cout << std::dec << "\n";
+        }
+        previousEnd = end;
+    }
+    std::cout << "Block transitions: contiguous=" << contiguous
+              << " gaps=" << gaps << " overlaps=" << overlaps << "\n";
+
 }
 
 bool selfTest() {
