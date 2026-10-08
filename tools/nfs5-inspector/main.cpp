@@ -418,6 +418,37 @@ void inspectPolygons(const Bytes& b, std::size_t articleIndex) {
                   << " payloadBytes=" << payloadBytes
                   << " payloadOffset=" << (valid ? p+payloadRelative : 0)
                   << " inRange=" << (valid ? "yes" : "no") << "\n";
+        if (valid && payloadBytes >= 48) {
+            const std::size_t base = p + payloadRelative;
+            const std::size_t infoCount = read32le(b, base + 40);
+            const std::size_t indexCount = read32le(b, base + 44);
+            const std::size_t fixed = 48;
+            const bool headerSafe = infoCount <= (payloadBytes - fixed) / 16 &&
+                indexCount <= (payloadBytes - fixed - infoCount*16) / 8;
+            if (headerSafe) {
+                const std::size_t streamStart = fixed + infoCount*16 + indexCount*8;
+                const bool streamSafe = indexCount == 0 ||
+                    (entryCount <= (payloadBytes - streamStart) / indexCount);
+                std::cout << "  CrpLib layout: infoCount=" << infoCount
+                          << " indexCount=" << indexCount
+                          << " streamStart=" << streamStart
+                          << " streamFits=" << (streamSafe ? "yes" : "no") << "\n";
+                if (streamSafe && indexCount <= 8) {
+                    for (std::size_t stream=0; stream<indexCount; ++stream) {
+                        const std::size_t d = base + 48 + infoCount*16 + stream*8;
+                        const unsigned streamIndex = unsigned(b[d]) | (unsigned(b[d+1]) << 8);
+                        const unsigned streamId = unsigned(b[d+2]) | (unsigned(b[d+3]) << 8);
+                        const std::size_t streamOffset = read32le(b,d+4);
+                        std::cout << "    stream[" << stream << "] index=" << streamIndex
+                                  << " id=" << streamId << " offset=" << streamOffset
+                                  << " inRange=" << (streamOffset <= entryCount*indexCount &&
+                                      entryCount <= entryCount*indexCount-streamOffset ? "yes" : "no") << "\n";
+                    }
+                }
+            } else {
+                std::cout << "  CrpLib layout: invalid header table counts\n";
+            }
+        }
         if (valid && payloadBytes > 0) {
             std::cout << "  prefix:";
             const auto n = std::min<std::size_t>(payloadBytes, 32);
