@@ -434,6 +434,23 @@ void inspectPolygons(const Bytes& b, std::size_t articleIndex) {
                           << " indexCount=" << indexCount
                           << " streamStart=" << streamStart
                           << " streamFits=" << (streamSafe ? "yes" : "no") << "\n";
+                if (streamSafe && infoCount <= 8) {
+                    for (std::size_t row = 0; row < infoCount; ++row) {
+                        const std::size_t q = base + 48 + row * 16;
+                        const auto rmOffset = read32le(b, q);
+                        const auto byteOffset = read32le(b, q+4);
+                        const unsigned byteLength = unsigned(b[q+8]) | (unsigned(b[q+9]) << 8);
+                        const unsigned id = unsigned(b[q+10]) | (unsigned(b[q+11]) << 8);
+                        const unsigned level = unsigned(b[q+12]) | (unsigned(b[q+13]) << 8);
+                        const unsigned ref = unsigned(b[q+14]) | (unsigned(b[q+15]) << 8);
+                        if (found <= 8)
+                            std::cout << "    info[" << row << "] id=" << id
+                                      << " level=" << level << " indexRef=" << ref
+                                      << " byteOffset=" << byteOffset
+                                      << " byteLength=" << byteLength
+                                      << " rmOffset=" << rmOffset << "\n";
+                    }
+                }
                 if (streamSafe && indexCount >= 1 && entryCount >= 3) {
                     const std::size_t indexData = base + streamStart;
                     std::uint8_t maximum = 0, minimum = 255;
