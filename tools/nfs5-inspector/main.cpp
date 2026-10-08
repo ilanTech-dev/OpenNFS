@@ -253,7 +253,7 @@ void inspect(const Bytes& b) {
 }
 
 
-void exportVertices(const Bytes& b, const std::filesystem::path& destination) {
+void exportVertices(const Bytes& b, const std::filesystem::path& destination, bool levelZeroOnly = false) {
     if (std::filesystem::exists(destination))
         throw std::runtime_error("OBJ output already exists; refusing to overwrite");
     if (b.size() < 16) throw std::runtime_error("CRP header too short");
@@ -277,6 +277,9 @@ void exportVertices(const Bytes& b, const std::filesystem::path& destination) {
         const std::size_t end = begin + lengthUnits * 16;
         for (std::size_t record = begin; record < end; record += 16) {
             if (b[record + 2] != 't' || b[record + 3] != 'v') continue;
+            // CrpLib LEVELINDEX_LEVEL extracts the high nibble of the part index.
+            const unsigned partInfo = unsigned(b[record]) | (unsigned(b[record + 1]) << 8);
+            if (levelZeroOnly && ((partInfo & 0xF0u) >> 4) != 0) continue;
             const std::size_t bytes = read32le(b, record + 4) >> 8;
             const std::size_t count = read32le(b, record + 8);
             const std::size_t relative = read32le(b, record + 12);
@@ -409,8 +412,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file>] | --self-test\n";
+    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file>] | --self-test\n";
         return 2;
     }
     try {
@@ -430,8 +433,8 @@ int main(int argc, char* argv[]) {
                   << (compressed ? "yes (10 FB)" : "no") << "\n";
         inspect(output);
         if (argc == 3 && std::string(argv[2]) == "--parts") inspectParts(output);
-        if (argc == 4 && std::string(argv[2]) == "--vertices")
-            exportVertices(output, std::filesystem::path(argv[3]));
+        if (argc == 4 && (std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0"))
+            exportVertices(output, std::filesystem::path(argv[3]), std::string(argv[2]) == "--vertices-level0");
         if (argc == 4 && std::string(argv[2]) == "--dump") {
             const std::filesystem::path destination(argv[3]);
             if (std::filesystem::exists(destination))
