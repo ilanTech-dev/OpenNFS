@@ -314,6 +314,73 @@ void exportVertices(const Bytes& b, const std::filesystem::path& destination) {
               << "Vertices: " << total << " skipped descriptors: " << skipped << "\n";
 }
 
+
+void inspectParts(const Bytes& b) {
+    if (b.size() < 16) throw std::runtime_error("CRP header too short");
+    const std::size_t articles = read32le(b, 4) >> 5;
+    const std::size_t dir = std::size_t(read32le(b, 12)) * 16;
+    if (dir > b.size() || articles > (b.size() - dir) / 16)
+        throw std::runtime_error("article directory outside file");
+
+    std::size_t foundNames = 0, invalidNames = 0, foundBases = 0;
+    std::map<unsigned, std::size_t> vertexPartInfos;
+    std::cout << "Article metadata probe (first 24 articles):\n";
+    for (std::size_t i = 0; i < articles; ++i) {
+        const std::size_t record = dir + 16 * i;
+        const std::size_t offsetUnits = read32le(b, record + 12);
+        const std::size_t lengthUnits = read32le(b, record + 8);
+        if (offsetUnits > (b.size() - record) / 16)
+            throw std::runtime_error("article block offset out of bounds");
+        const std::size_t begin = record + 16 * offsetUnits;
+        if (lengthUnits > (b.size() - begin) / 16)
+            throw std::runtime_error("article block length out of bounds");
+        const std::size_t end = begin + 16 * lengthUnits;
+        std::string name = "(missing)";
+        std::uint32_t baseRaw = 0;
+        bool hasBase = false;
+        for (std::size_t part = begin; part < end; part += 16) {
+            const std::string tag(b.begin()+static_cast<std::ptrdiff_t>(part),
+                                  b.begin()+static_cast<std::ptrdiff_t>(part+4));
+            if (tag == "emaN" || tag == "Name") {
+                const std::size_t byteLength = read32le(b, part + 4) >> 8;
+                const std::size_t relative = read32le(b, part + 12);
+                if (relative > b.size()-part || byteLength > b.size()-part-relative || byteLength == 0 || byteLength > 4096) {
+                    ++invalidNames;
+                    name = "(invalid name payload)";
+                } else {
+                    ++foundNames;
+                    const std::size_t start = part + relative;
+                    name.clear();
+                    for (std::size_t j = 0; j < byteLength && b[start+j] != 0; ++j) {
+                        const unsigned char c = b[start+j];
+                        name.push_back(c >= 32 && c <= 126 ? static_cast<char>(c) : '?');
+                    }
+                }
+            } else if (tag == "esaB" || tag == "Base") {
+                ++foundBases;
+                hasBase = true;
+                baseRaw = read32le(b, part + 4);
+            } else if (b[part+2] == 't' && b[part+3] == 'v') {
+                const unsigned info = unsigned(b[part]) | (unsigned(b[part+1]) << 8);
+                ++vertexPartInfos[info];
+            }
+        }
+        if (i < 24) {
+            std::cout << "Article " << i << " name='" << name
+                      << "' baseLengthInfo=0x" << std::hex << (hasBase ? baseRaw : 0)
+                      << std::dec << " descriptors=" << lengthUnits << "\n";
+        }
+    }
+    std::cout << "Names found: " << foundNames << " invalid: " << invalidNames
+              << " base descriptors: " << foundBases << "\n"
+              << "Raw vertex part-info values (first 32):\n";
+    std::size_t printed=0;
+    for (const auto& [info,count] : vertexPartInfos) {
+        if (printed++ == 32) break;
+        std::cout << "  0x" << std::hex << info << std::dec << ": " << count << "\n";
+    }
+}
+
 bool selfTest() {
     auto test = [](const Bytes& input, const Bytes& expected) {
         bool compressed = false;
@@ -342,7 +409,7 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 4 && (std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices")) ) {
+    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices")) ) {
         std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file>] | --self-test\n";
         return 2;
     }
