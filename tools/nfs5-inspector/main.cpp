@@ -252,6 +252,68 @@ void inspect(const Bytes& b) {
 
 }
 
+
+void exportVertices(const Bytes& b, const std::filesystem::path& destination) {
+    if (std::filesystem::exists(destination))
+        throw std::runtime_error("OBJ output already exists; refusing to overwrite");
+    if (b.size() < 16) throw std::runtime_error("CRP header too short");
+    const std::size_t articleCount = read32le(b, 4) >> 5;
+    const std::size_t directory = std::size_t(read32le(b, 12)) * 16;
+    if (directory > b.size() || articleCount > (b.size() - directory) / 16)
+        throw std::runtime_error("invalid article directory");
+    std::ofstream out(destination);
+    if (!out) throw std::runtime_error("cannot open OBJ output");
+    out << "# NFS5 vertex-only diagnostic; no polygon faces or transforms yet\n";
+    out << "# Local personal game data; do not redistribute this generated file\n";
+    out << std::setprecision(9);
+    std::size_t total = 0, skipped = 0;
+    for (std::size_t article = 0; article < articleCount; ++article) {
+        const std::size_t at = directory + article * 16;
+        const std::size_t offsetUnits = read32le(b, at + 12);
+        const std::size_t lengthUnits = read32le(b, at + 8);
+        if (offsetUnits > (b.size() - at) / 16) throw std::runtime_error("invalid article offset");
+        const std::size_t begin = at + offsetUnits * 16;
+        if (lengthUnits > (b.size() - begin) / 16) throw std::runtime_error("invalid article size");
+        const std::size_t end = begin + lengthUnits * 16;
+        for (std::size_t record = begin; record < end; record += 16) {
+            if (b[record + 2] != 't' || b[record + 3] != 'v') continue;
+            const std::size_t bytes = read32le(b, record + 4) >> 8;
+            const std::size_t count = read32le(b, record + 8);
+            const std::size_t relative = read32le(b, record + 12);
+            if (count == 0 || count > SIZE_MAX / 16 || bytes != count * 16 ||
+                relative > b.size() - record || bytes > b.size() - record - relative) {
+                ++skipped;
+                continue;
+            }
+            const std::size_t start = record + relative;
+            out << "g article_" << article << "_descriptor_" << record << "\n";
+            const std::size_t first = total + 1;
+            for (std::size_t j = 0; j < count; ++j) {
+                auto asFloat = [&](std::size_t loc) {
+                    const std::uint32_t bits = read32le(b, loc);
+                    float value;
+                    std::memcpy(&value, &bits, sizeof value);
+                    return value;
+                };
+                const std::size_t atVertex = start + j * 16;
+                const float x = asFloat(atVertex), y = asFloat(atVertex + 4);
+                const float z = asFloat(atVertex + 8);
+                if (!(std::isfinite(x) && std::isfinite(y) && std::isfinite(z)))
+                    throw std::runtime_error("non-finite vertex coordinate");
+                out << "v " << x << ' ' << y << ' ' << z << "\n";
+                ++total;
+            }
+            // OBJ point elements ensure vertex-only groups are visible in viewers
+            // that support point geometry (Blender imports them as vertices).
+            for (std::size_t idx = first; idx <= total; ++idx) out << "p " << idx << "\n";
+        }
+    }
+    out.close();
+    if (!out) throw std::runtime_error("failed writing OBJ file");
+    std::cout << "Vertex-only OBJ: " << destination << "\n"
+              << "Vertices: " << total << " skipped descriptors: " << skipped << "\n";
+}
+
 bool selfTest() {
     auto test = [](const Bytes& input, const Bytes& expected) {
         bool compressed = false;
@@ -280,8 +342,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 4 && std::string(argv[2]) == "--dump")) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file>] | --self-test\n";
+    if (argc != 2 && !(argc == 4 && (std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file>] | --self-test\n";
         return 2;
     }
     try {
@@ -300,7 +362,9 @@ int main(int argc, char* argv[]) {
                   << "\nInput size: " << input.size() << "\nCompressed: "
                   << (compressed ? "yes (10 FB)" : "no") << "\n";
         inspect(output);
-        if (argc == 4) {
+        if (argc == 4 && std::string(argv[2]) == "--vertices")
+            exportVertices(output, std::filesystem::path(argv[3]));
+        if (argc == 4 && std::string(argv[2]) == "--dump") {
             const std::filesystem::path destination(argv[3]);
             if (std::filesystem::exists(destination))
                 throw std::runtime_error("output path already exists; refusing to overwrite");
