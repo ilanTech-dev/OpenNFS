@@ -318,6 +318,96 @@ void exportVertices(const Bytes& b, const std::filesystem::path& destination, bo
 }
 
 
+
+void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
+    if (std::filesystem::exists(dest)) throw std::runtime_error("OBJ already exists");
+    const std::size_t n = read32le(b,4)>>5, dir = std::size_t(read32le(b,12))*16;
+    if (dir > b.size() || n > (b.size()-dir)/16 || n <= 5)
+        throw std::runtime_error("Body article missing");
+    const std::size_t at=dir+5*16, rel=read32le(b,at+12), len=read32le(b,at+8);
+    if(rel>(b.size()-at)/16) throw std::runtime_error("invalid Body offset");
+    const std::size_t begin=at+rel*16;
+    if(len>(b.size()-begin)/16) throw std::runtime_error("invalid Body size");
+    const std::size_t end=begin+len*16;
+    struct VBuf {std::size_t start,count,descriptor; unsigned info;};
+    std::vector<VBuf> vertices;
+    for(std::size_t p=begin;p<end;p+=16) {
+        if(b[p+2]!='t'||b[p+3]!='v')continue;
+        const std::size_t size=read32le(b,p+4)>>8, count=read32le(b,p+8), off=read32le(b,p+12);
+        if(count==0||count>SIZE_MAX/16||size!=count*16||off>b.size()-p||size>b.size()-p-off)continue;
+        vertices.push_back({p+off,count,p,unsigned(b[p])|(unsigned(b[p+1])<<8)});
+    }
+    std::cout<<"Body vertex buffers (descriptor, partInfo, count):\n";
+    for(const auto& v:vertices)
+        std::cout<<"  "<<v.descriptor<<" 0x"<<std::hex<<v.info<<std::dec<<" "<<v.count<<"\n";
+    // The original loader selects its geometry through GetDataEntry(ID_VERTEX, lev).
+    // Limit this first experiment to the unique 251-vertex buffer referenced by
+    // level-1 Body polygon info rows; never guess if there are multiple candidates.
+    std::vector<VBuf> candidates;
+    for(const auto& v:vertices) if(v.count==251 && (v.info&15)==1) candidates.push_back(v);
+    if(candidates.size()!=1) {
+        std::cout<<"251-vertex level-1 candidate count: "<<candidates.size()<<"\n";
+        throw std::runtime_error("ambiguous vertex buffer; OBJ not written");
+    }
+    const auto selected=candidates.front();
+    std::vector<std::uint32_t> faces;
+    std::size_t used=0, skipped=0;
+    for(std::size_t p=begin;p<end;p+=16) {
+        if(b[p+2]!='r'||b[p+3]!='p')continue;
+        const unsigned partInfo=unsigned(b[p])|(unsigned(b[p+1])<<8);
+        if((partInfo>>12)!=1)continue; // first polygon LOD group only
+        const std::size_t size=read32le(b,p+4)>>8, count=read32le(b,p+8), off=read32le(b,p+12);
+        if(off>b.size()-p||size>b.size()-p-off||size<48||count%3) {++skipped;continue;}
+        const std::size_t base=p+off, infos=read32le(b,base+40), streams=read32le(b,base+44);
+        if(infos> (size-48)/16 || streams> (size-48-infos*16)/8) {++skipped;continue;}
+        const std::size_t data=48+infos*16+streams*8;
+        if(streams==0||count>(size-data)/streams){++skipped;continue;}
+        std::size_t vertexOff=SIZE_MAX;
+        for(std::size_t k=0;k<streams;++k) {
+            const auto descriptor=base+48+infos*16+k*8;
+            const unsigned id=unsigned(b[descriptor+2])|(unsigned(b[descriptor+3])<<8);
+            if(id==0x4976)vertexOff=read32le(b,descriptor+4);
+        }
+        std::size_t adjust=SIZE_MAX;
+        for(std::size_t k=0;k<infos;++k) {
+            const auto row=base+48+k*16;
+            const unsigned id=unsigned(b[row+10])|(unsigned(b[row+11])<<8);
+            const unsigned level=unsigned(b[row+12])|(unsigned(b[row+13])<<8);
+            if(id==0&&level==1&&read32le(b,row+4)%16==0)
+                adjust=read32le(b,row+4)/16;
+        }
+        if(vertexOff==SIZE_MAX||adjust==SIZE_MAX||vertexOff>size-data||
+           count>size-data-vertexOff){++skipped;continue;}
+        bool valid=true;
+        for(std::size_t k=0;k<count;++k)
+            if(std::size_t(b[base+data+vertexOff+k])+adjust>=selected.count)valid=false;
+        if(!valid){++skipped;continue;}
+        for(std::size_t k=0;k<count;++k)
+            faces.push_back(static_cast<std::uint32_t>(b[base+data+vertexOff+k]+adjust+1));
+        ++used;
+    }
+    if(faces.empty())throw std::runtime_error("no validated triangles; OBJ not written");
+    std::ofstream out(dest);
+    if(!out)throw std::runtime_error("cannot open OBJ");
+    out<<"# Local diagnostic: Porsche 993 Body, first polygon group only\n";
+    out<<std::setprecision(9);
+    for(std::size_t i=0;i<selected.count;++i) {
+        const std::size_t v=selected.start+i*16;
+        auto rd=[&](std::size_t off){const auto bits=read32le(b,v+off);float value;std::memcpy(&value,&bits,4);return value;};
+        const float x=rd(0),y=rd(4),z=rd(8);
+        if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))
+            throw std::runtime_error("non-finite vertex");
+        out<<"v "<<x<<" "<<y<<" "<<z<<"\n";
+    }
+    out<<"g Porsche993_Body_level1\n";
+    for(std::size_t i=0;i<faces.size();i+=3)
+        out<<"f "<<faces[i]<<" "<<faces[i+1]<<" "<<faces[i+2]<<"\n";
+    out.close();
+    if(!out)throw std::runtime_error("failed writing OBJ");
+    std::cout<<"Body mesh exported: "<<faces.size()/3<<" triangles from "
+             <<used<<" polygon descriptors; skipped "<<skipped<<" -> "<<dest<<"\n";
+}
+
 void inspectParts(const Bytes& b) {
     if (b.size() < 16) throw std::runtime_error("CRP header too short");
     const std::size_t articles = read32le(b, 4) >> 5;
@@ -523,8 +613,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -544,6 +634,8 @@ int main(int argc, char* argv[]) {
                   << (compressed ? "yes (10 FB)" : "no") << "\n";
         inspect(output);
         if (argc == 3 && std::string(argv[2]) == "--parts") inspectParts(output);
+        if (argc == 4 && std::string(argv[2]) == "--body-mesh")
+            exportBodyMesh(output, std::filesystem::path(argv[3]));
         if (argc == 4 && std::string(argv[2]) == "--polygons") {
             const std::string arg(argv[3]);
             std::size_t consumed = 0;
