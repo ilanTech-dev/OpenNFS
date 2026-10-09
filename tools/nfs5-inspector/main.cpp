@@ -555,6 +555,64 @@ void inspectTransforms(const Bytes& b, std::size_t article) {
     std::cout<<"  transform descriptors: "<<found<<" (not yet applied to OBJ)\n";
 }
 
+
+void inspectWheelPlacement(const Bytes& b) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16||n<=49)
+        throw std::runtime_error("missing wheel articles");
+    auto asFloat=[&](std::size_t p) {
+        const auto bits=read32le(b,p);
+        float x; std::memcpy(&x,&bits,sizeof(x)); return x;
+    };
+    for(std::size_t article=46;article<=49;++article) {
+        const std::size_t at=dir+article*16,rel=read32le(b,at+12),len=read32le(b,at+8);
+        if(rel>(b.size()-at)/16)throw std::runtime_error("bad article offset");
+        const std::size_t begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("bad article length");
+        const std::size_t end=begin+len*16;
+        std::cout<<"Wheel "<<article<<" "<<articleName(b,article)<<"\n";
+        bool haveVertex=false,haveMatrix=false;
+        float lo[3]{},hi[3]{},translation[3]{};
+        for(std::size_t p=begin;p<end;p+=16) {
+            const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            const std::size_t off=read32le(b,p+12),bytes=read32le(b,p+4)>>8;
+            if(off>b.size()-p||bytes>b.size()-p-off)continue;
+            const std::size_t start=p+off;
+            if(b[p+2]=='t'&&b[p+3]=='v'&&info==1) {
+                const std::size_t count=read32le(b,p+8);
+                if(count==0||count>SIZE_MAX/16||count*16!=bytes)continue;
+                for(std::size_t j=0;j<count;++j) {
+                    const std::size_t v=start+j*16;
+                    float xyz[]{asFloat(v),asFloat(v+4),asFloat(v+8)};
+                    if(!std::all_of(xyz,xyz+3,[](float x){return std::isfinite(x);}))
+                        throw std::runtime_error("nonfinite wheel vertex");
+                    for(int k=0;k<3;++k) {
+                        if(!haveVertex)lo[k]=hi[k]=xyz[k];
+                        else {lo[k]=std::min(lo[k],xyz[k]);hi[k]=std::max(hi[k],xyz[k]);}
+                    }
+                    haveVertex=true;
+                }
+                std::cout<<"  vertexCount="<<count<<" raw bounds ["
+                    <<lo[0]<<","<<lo[1]<<","<<lo[2]<<"] to ["
+                    <<hi[0]<<","<<hi[1]<<","<<hi[2]<<"]\n";
+            }
+            if(b[p+2]=='r'&&b[p+3]=='t'&&info==1&&bytes>=64) {
+                for(int k=0;k<3;++k)translation[k]=asFloat(start+48+k*4);
+                haveMatrix=true;
+                std::cout<<"  transform translation ["
+                    <<translation[0]<<","<<translation[1]<<","<<translation[2]<<"]\n";
+            }
+        }
+        if(haveVertex&&haveMatrix) {
+            std::cout<<"  raw centre=(";
+            for(int k=0;k<3;++k)std::cout<<(k?",":"")<<(lo[k]+hi[k])/2;
+            std::cout<<") translated centre=(";
+            for(int k=0;k<3;++k)std::cout<<(k?",":"")<<((lo[k]+hi[k])/2+translation[k]);
+            std::cout<<")\n";
+        } else std::cout<<"  missing level-1 raw vertex or transform data\n";
+    }
+}
+
 void exportBatch(const Bytes& b, const std::filesystem::path& destination) {
     if(std::filesystem::exists(destination))
         throw std::runtime_error("batch output directory already exists");
@@ -787,8 +845,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement")) && !(argc == 4 && (std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --wheel-placement | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -808,6 +866,7 @@ int main(int argc, char* argv[]) {
                   << (compressed ? "yes (10 FB)" : "no") << "\n";
         inspect(output);
         if (argc == 3 && std::string(argv[2]) == "--parts") inspectParts(output);
+        if (argc == 3 && std::string(argv[2]) == "--wheel-placement") inspectWheelPlacement(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
         if (argc == 5 && std::string(argv[2]) == "--article-mesh") {
