@@ -499,6 +499,89 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
              <<used<<" polygon descriptors; skipped "<<skipped<<" -> "<<dest<<"\n";
 }
 
+
+std::string articleName(const Bytes& b, std::size_t article) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16, n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16||article>=n) throw std::runtime_error("bad article");
+    const std::size_t at=dir+article*16,off=read32le(b,at+12),len=read32le(b,at+8);
+    if(off>(b.size()-at)/16)throw std::runtime_error("bad article offset");
+    const std::size_t start=at+off*16;
+    if(len>(b.size()-start)/16)throw std::runtime_error("bad article length");
+    for(std::size_t p=start;p<start+len*16;p+=16) {
+        if(!((b[p]=='e'&&b[p+1]=='m'&&b[p+2]=='a'&&b[p+3]=='N')||
+             (b[p]=='N'&&b[p+1]=='a'&&b[p+2]=='m'&&b[p+3]=='e')))continue;
+        const std::size_t rel=read32le(b,p+12),bytes=read32le(b,p+4)>>8;
+        if(rel>b.size()-p||bytes>b.size()-p-rel||bytes>4096)break;
+        std::string name;
+        for(std::size_t k=0;k<bytes&&b[p+rel+k];++k) {
+            const unsigned char c=b[p+rel+k];
+            name+=((c>='A'&&c<='Z')||(c>='a'&&c<='z')||
+                   (c>='0'&&c<='9')||c=='_'||c=='-')?char(c):'_';
+        }
+        return name.empty()?"unnamed":name;
+    }
+    return "unnamed";
+}
+
+void inspectTransforms(const Bytes& b, std::size_t article) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16||article>=n)throw std::runtime_error("invalid article");
+    const std::size_t at=dir+article*16,off=read32le(b,at+12),len=read32le(b,at+8);
+    if(off>(b.size()-at)/16)throw std::runtime_error("invalid article offset");
+    const std::size_t start=at+off*16;
+    if(len>(b.size()-start)/16)throw std::runtime_error("invalid article length");
+    std::cout<<"Transform diagnostics article "<<article<<" "<<articleName(b,article)<<"\n";
+    std::size_t found=0;
+    for(std::size_t p=start;p<start+len*16;p+=16) {
+        if(b[p+2]!='r'||b[p+3]!='t')continue;
+        ++found;
+        const std::size_t rel=read32le(b,p+12),bytes=read32le(b,p+4)>>8;
+        const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+        if(rel>b.size()-p||bytes>b.size()-p-rel||bytes<64) {
+            std::cout<<"  descriptor="<<p<<" partInfo=0x"<<std::hex<<info<<std::dec<<" invalid matrix payload\n";
+            continue;
+        }
+        const std::size_t pos=p+rel;
+        float m[16];
+        for(std::size_t k=0;k<16;++k) {
+            const auto bits=read32le(b,pos+k*4);
+            std::memcpy(&m[k],&bits,4);
+        }
+        std::cout<<"  descriptor="<<p<<" partInfo=0x"<<std::hex<<info<<std::dec
+                 <<" matrixBytes="<<bytes<<" translation=("
+                 <<m[12]<<","<<m[13]<<","<<m[14]<<")"
+                 <<" finite="<<(std::all_of(m,m+16,[](float x){return std::isfinite(x);})?"yes":"no")<<"\n";
+    }
+    std::cout<<"  transform descriptors: "<<found<<" (not yet applied to OBJ)\n";
+}
+
+void exportBatch(const Bytes& b, const std::filesystem::path& destination) {
+    if(std::filesystem::exists(destination))
+        throw std::runtime_error("batch output directory already exists");
+    std::filesystem::create_directories(destination);
+    std::ofstream manifest(destination/"manifest.csv");
+    if(!manifest)throw std::runtime_error("cannot write batch manifest");
+    manifest<<"article,name,status,file_or_reason\n";
+    const std::size_t count=read32le(b,4)>>5;
+    std::size_t exported=0,failed=0;
+    for(std::size_t i=0;i<count;++i) {
+        const std::string name=articleName(b,i);
+        const std::string filename=std::to_string(i)+"_"+name+".obj";
+        try {
+            exportArticleMesh(b,i,destination/filename);
+            manifest<<i<<","<<name<<",exported,"<<filename<<"\n";
+            ++exported;
+        } catch(const std::exception& e) {
+            manifest<<i<<","<<name<<",skipped,"<<'"'<<e.what()<<'"'<<"\n";
+            ++failed;
+        }
+    }
+    manifest.close();
+    if(!manifest)throw std::runtime_error("failed writing manifest");
+    std::cout<<"Batch complete: "<<exported<<" exported, "<<failed<<" skipped; details in "
+             <<destination/"manifest.csv"<<"\n";
+}
+
 void inspectParts(const Bytes& b) {
     if (b.size() < 16) throw std::runtime_error("CRP header too short");
     const std::size_t articles = read32le(b, 4) >> 5;
@@ -704,8 +787,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && std::string(argv[2]) == "--parts") && !(argc == 4 && (std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -743,6 +826,15 @@ int main(int argc, char* argv[]) {
         }
         if (argc == 4 && (std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0"))
             exportVertices(output, std::filesystem::path(argv[3]), std::string(argv[2]) == "--vertices-level0");
+        if (argc == 4 && std::string(argv[2]) == "--batch-mesh")
+            exportBatch(output, std::filesystem::path(argv[3]));
+        if (argc == 4 && std::string(argv[2]) == "--transforms") {
+            const std::string value(argv[3]);
+            std::size_t consumed=0;
+            const auto idx=std::stoull(value,&consumed,10);
+            if(consumed!=value.size()||idx>SIZE_MAX) throw std::runtime_error("invalid article index");
+            inspectTransforms(output,static_cast<std::size_t>(idx));
+        }
         if (argc == 4 && std::string(argv[2]) == "--dump") {
             const std::filesystem::path destination(argv[3]);
             if (std::filesystem::exists(destination))
