@@ -342,11 +342,11 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
         std::cout<<"  "<<v.descriptor<<" 0x"<<std::hex<<v.info<<std::dec<<" "<<v.count<<"\n";
     // The original loader selects its geometry through GetDataEntry(ID_VERTEX, lev).
     // Limit this first experiment to the unique 251-vertex buffer referenced by
-    // level-1 Body polygon info rows; never guess if there are multiple candidates.
+    // level-1 Body polygon info rows. Prefer the explicit unflagged 0x0001\n    // descriptor over 0x8001; the high-bit variant's semantics remain unknown.\n    // Never guess if more than one unflagged candidate remains.
     std::vector<VBuf> candidates;
-    for(const auto& v:vertices) if(v.count==251 && (v.info&15)==1) candidates.push_back(v);
+    for(const auto& v:vertices) if(v.count==251 && v.info==0x0001) candidates.push_back(v);
     if(candidates.size()!=1) {
-        std::cout<<"251-vertex level-1 candidate count: "<<candidates.size()<<"\n";
+        std::cout<<"251-vertex unflagged 0x0001 candidate count: "<<candidates.size()<<"\n";
         throw std::runtime_error("ambiguous vertex buffer; OBJ not written");
     }
     const auto selected=candidates.front();
