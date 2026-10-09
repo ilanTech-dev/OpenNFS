@@ -429,37 +429,15 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
     std::cout<<"Article "<<article<<" vertex buffers (descriptor, partInfo, count):\n";
     for(const auto& v:vertices)
         std::cout<<"  "<<v.descriptor<<" 0x"<<std::hex<<v.info<<std::dec<<" "<<v.count<<"\n";
-    // Select a matching unflagged vertex descriptor for polygon level 1.
-    // Derive expected vertex count from the ID_INFO_VERTEX row, not a hardcoded
-    // count specific to the Porsche Body article.
-    std::size_t expectedCount=0;
-    for(std::size_t p=begin;p<end;p+=16) {
-        if(b[p+2]!='r'||b[p+3]!='p')continue;
-        const unsigned partInfo=unsigned(b[p])|(unsigned(b[p+1])<<8);
-        if((partInfo>>12)!=1)continue;
-        const std::size_t size=read32le(b,p+4)>>8, off=read32le(b,p+12);
-        if(off>b.size()-p||size>b.size()-p-off||size<48)continue;
-        const std::size_t base=p+off, infos=read32le(b,base+40);
-        if(infos>(size-48)/16)continue;
-        for(std::size_t k=0;k<infos;++k) {
-            const auto row=base+48+k*16;
-            const unsigned id=unsigned(b[row+10])|(unsigned(b[row+11])<<8);
-            const unsigned level=unsigned(b[row+12])|(unsigned(b[row+13])<<8);
-            const unsigned len=unsigned(b[row+8])|(unsigned(b[row+9])<<8);
-            if(id==0&&level==1&&len%16==0) {
-                if(expectedCount && expectedCount!=len/16)
-                    throw std::runtime_error("inconsistent vertex buffer lengths; OBJ not written");
-                expectedCount=len/16;
-            }
-        }
-    }
+    // tPartInfo::Length is a *referenced span*, not necessarily the size of
+    // the entire vertex array. For example, TrunkOut2 references a 101-vertex
+    // span within its 202-vertex level-1 buffer. Validate the actual indices
+    // against the full buffer below.
     std::vector<VBuf> candidates;
     for(const auto& v:vertices)
-        if(expectedCount && v.count==expectedCount && v.info==0x0001)
-            candidates.push_back(v);
+        if(v.info==0x0001) candidates.push_back(v);
     if(candidates.size()!=1) {
-        std::cout<<"Expected unflagged level-1 vertex count: "<<expectedCount
-                 <<"; matches: "<<candidates.size()<<"\n";
+        std::cout<<"Unflagged level-1 candidate count: "<<candidates.size()<<"\n";
         throw std::runtime_error("no unique matching vertex buffer; OBJ not written");
     }
     const auto selected=candidates.front();
