@@ -21,11 +21,12 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge]")
+    door_hinge = "--door-hinge" in args
     door_closed = "--door-closed" in args
     door_test = "--door-test" in args
     show_panels = "--panels" in args
-    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed")]
+    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge")]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -134,7 +135,7 @@ def main():
             obj.hide_set(not show_panels)
             obj.hide_render = not show_panels
 
-    if door_test or door_closed:
+    if door_test or door_closed or door_hinge:
         # Door-only A/B test: retain the raw hinge assembly but hide it.
         # Show an independent linked-mesh preview translated by the mapped
         # CRP component matrix. No modification to exported geometry.
@@ -157,12 +158,38 @@ def main():
                 collection.objects.link(candidate)
                 candidate.parent = root
                 candidate.matrix_parent_inverse.identity()
-                candidate.location = DOOR_993_CLOSED_POSITION if door_closed else mapped
-                candidate.rotation_euler = DOOR_993_CLOSED_ROTATION if door_closed else (0, 0, 0)
+                candidate.location = DOOR_993_CLOSED_POSITION if (door_closed or door_hinge) else mapped
+                candidate.rotation_euler = DOOR_993_CLOSED_ROTATION if (door_closed or door_hinge) else (0, 0, 0)
                 candidate.scale = (1, 1, 1)
                 candidate["crp_translation_test"] = True
                 candidate.hide_set(False)
                 candidate.hide_render = False
+                if door_hinge:
+                    # Compute the front edge from the actual *closed* geometry,
+                    # then put an independent hinge at the A-pillar side.
+                    # Car front is -Y; hinge rotates around Blender vertical Z.
+                    from mathutils import Vector
+                    bpy.context.view_layer.update()
+                    bounds = [candidate.matrix_world @ Vector(c) for c in candidate.bound_box]
+                    front_y = min(point.y for point in bounds)
+                    low_z = min(point.z for point in bounds)
+                    high_z = max(point.z for point in bounds)
+                    hinge = bpy.data.objects.new("HINGE_993_LeftDoor_CLOSED_REFERENCE", None)
+                    collection.objects.link(hinge)
+                    hinge.parent = root
+                    hinge.location = (candidate.location.x, front_y, (low_z + high_z) / 2)
+                    hinge.empty_display_type = 'ARROWS'
+                    hinge.empty_display_size = 0.22
+                    hinge["hinge_axis"] = "Blender Z (vertical)"
+                    hinge["hinge_status"] = "approximate from visually calibrated door bounds"
+                    hinge["closed_angle_degrees"] = 0.0
+                    bpy.context.view_layer.update()
+                    matrix = candidate.matrix_world.copy()
+                    candidate.parent = hinge
+                    candidate.matrix_world = matrix
+                    print(f"DOOR HINGE candidate at {tuple(round(x, 4) for x in hinge.location)}")
+                    print("Rotate HINGE_993_LeftDoor_CLOSED_REFERENCE around local Z to open.")
+                    print("Rotation Z = 0 is the verified closed reference; axis and pivot provisional.")
                 for original in door_pieces:
                     original.hide_set(True)
                     original.hide_render = True
