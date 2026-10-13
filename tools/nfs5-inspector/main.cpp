@@ -613,6 +613,50 @@ void inspectWheelPlacement(const Bytes& b) {
     }
 }
 
+
+void inspectComponentMetadata(const Bytes& b) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
+    const std::size_t ids[]{4,5,13,28,46,47,48,49,52,53};
+    for(const auto article: ids) {
+        if(article>=n)continue;
+        const std::size_t at=dir+article*16,off=read32le(b,at+12),len=read32le(b,at+8);
+        if(off>(b.size()-at)/16)throw std::runtime_error("bad article offset");
+        const auto begin=at+off*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("bad article length");
+        std::cout<<"Article "<<article<<" "<<articleName(b,article)<<"\n";
+        for(std::size_t p=begin;p<begin+len*16;p+=16) {
+            const std::size_t rel=read32le(b,p+12),bytes=read32le(b,p+4)>>8;
+            if(rel>b.size()-p||bytes>b.size()-p-rel)continue;
+            const std::size_t start=p+rel;
+            if(b[p+2]=='a'&&b[p+3]=='B') {
+                if(bytes<16){std::cout<<"  Base payload too short: "<<bytes<<"\n";continue;}
+                auto v=[&](int i){return unsigned(b[start+i]);};
+                std::cout<<"  Base: geomIndex="<<v(0)<<" typeIndex="<<v(1)
+                         <<" geomPlace="<<v(3)<<" wheelType="<<v(4)
+                         <<" extraType="<<v(5)<<" textureType="<<v(6)
+                         <<" geomType="<<v(7)<<" animCount="<<v(8)
+                         <<" animType="<<v(9)<<" levelIndex="<<v(10)
+                         <<" hand="<<v(14)<<"\n";
+            }
+            if(b[p+2]=='r'&&b[p+3]=='t'&&bytes>=64) {
+                const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+                if(info!=1)continue;
+                std::cout<<"  level1 matrix (four rows of four):\n";
+                for(int row=0;row<4;++row) {
+                    std::cout<<"    ";
+                    for(int col=0;col<4;++col) {
+                        const std::uint32_t bits=read32le(b,start+4*(row*4+col));
+                        float value;std::memcpy(&value,&bits,4);
+                        std::cout<<(col?" ":"")<<value;
+                    }
+                    std::cout<<"\n";
+                }
+            }
+        }
+    }
+}
+
 void exportBatch(const Bytes& b, const std::filesystem::path& destination) {
     if(std::filesystem::exists(destination))
         throw std::runtime_error("batch output directory already exists");
@@ -845,8 +889,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement")) && !(argc == 4 && (std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --wheel-placement | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata")) && !(argc == 4 && (std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --wheel-placement | --component-metadata | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -867,6 +911,7 @@ int main(int argc, char* argv[]) {
         inspect(output);
         if (argc == 3 && std::string(argv[2]) == "--parts") inspectParts(output);
         if (argc == 3 && std::string(argv[2]) == "--wheel-placement") inspectWheelPlacement(output);
+        if (argc == 3 && std::string(argv[2]) == "--component-metadata") inspectComponentMetadata(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
         if (argc == 5 && std::string(argv[2]) == "--article-mesh") {
