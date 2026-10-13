@@ -7,7 +7,6 @@ Original game resources stay local and must not be committed.
 """
 import bpy
 import csv
-import math
 import sys
 from pathlib import Path
 
@@ -31,8 +30,8 @@ def main():
     # both mesh vertices and CRP component translations consistently.
     root = bpy.data.objects.new("Porsche_993_CRP_to_Blender", None)
     collection.objects.link(root)
-    root.rotation_euler.x = math.pi / 2
-    root["coordinate_conversion"] = "CRP(x,y,z) -> Blender(x,-z,y)"
+    root.rotation_euler = (0.0, 0.0, 0.0)
+    root["coordinate_conversion"] = "mesh unchanged; translation (x,y,z) -> (x,z,y)"
     initially_visible = {5, 20}  # hide movable panels for alignment
     # The TypeIndex=1 wheel meshes are variants, not left/right positions.
     # Opposite-side mirroring is an unverified reconstruction hypothesis.
@@ -74,7 +73,7 @@ def main():
                 obj.hide_set(not visible)
                 obj.hide_render = not visible
                 if index in (46, 47) and info and int(info["has_transform"]):
-                    obj.location = tuple(float(info[k]) for k in ("tx", "ty", "tz"))
+                    obj.location = (float(info["tx"]), float(info["tz"]), float(info["ty"]))
                     wheels[index] = obj
             imported += 1
 
@@ -96,7 +95,7 @@ def main():
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
-    print("CRP Y-up -> Blender Z-up conversion applied via parent root.")
+    print("Mesh coordinates unchanged; wheel translation Y/Z swapped.")
     print("Door/hood pivots preserved as properties; movable panels hidden.")
 
 
