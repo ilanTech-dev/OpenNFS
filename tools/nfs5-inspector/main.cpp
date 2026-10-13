@@ -659,6 +659,50 @@ void inspectComponentMetadata(const Bytes& b) {
     }
 }
 
+
+void exportAssemblyMetadata(const Bytes& b, const std::filesystem::path& dest) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article table");
+    if(std::filesystem::exists(dest))throw std::runtime_error("metadata output exists");
+    std::ofstream out(dest);
+    if(!out)throw std::runtime_error("cannot create metadata CSV");
+    out<<"article,name,geom_index,type_index,geom_type,wheel_type,level_index,anim_type,tx,ty,tz,has_transform\n";
+    for(std::size_t i=0;i<n;++i) {
+        const std::size_t at=dir+i*16,rel=read32le(b,at+12),len=read32le(b,at+8);
+        if(rel>(b.size()-at)/16)throw std::runtime_error("bad article offset");
+        const auto begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("bad article length");
+        int geom=-1,type=-1,gtype=-1,wtype=-1,level=-1,anim=-1;
+        float translation[3]{};
+        bool hasTransform=false;
+        for(std::size_t p=begin;p<begin+len*16;p+=16) {
+            const std::size_t off=read32le(b,p+12),bytes=read32le(b,p+4)>>8;
+            if(off>b.size()-p||bytes>b.size()-p-off)continue;
+            const auto start=p+off;
+            if(b[p+2]=='a'&&b[p+3]=='B'&&bytes>=100) {
+                const auto info=start+68;
+                geom=b[info];type=b[info+1];wtype=b[info+4];
+                gtype=b[info+7];anim=b[info+9];level=b[info+10];
+            }
+            if(b[p+2]=='r'&&b[p+3]=='t'&&bytes>=64) {
+                const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+                if(info!=1)continue;
+                for(int k=0;k<3;++k) {
+                    const auto bits=read32le(b,start+48+k*4);
+                    std::memcpy(&translation[k],&bits,4);
+                    if(!std::isfinite(translation[k]))throw std::runtime_error("nonfinite transform");
+                }
+                hasTransform=true;
+            }
+        }
+        out<<i<<","<<articleName(b,i)<<","<<geom<<","<<type<<","<<gtype<<","<<wtype
+           <<","<<level<<","<<anim<<","<<translation[0]<<","<<translation[1]
+           <<","<<translation[2]<<","<<(hasTransform?1:0)<<"\n";
+    }
+    if(!out)throw std::runtime_error("failed to write metadata");
+    std::cout<<"Wrote assembly metadata for "<<n<<" articles: "<<dest<<"\n";
+}
+
 void exportBatch(const Bytes& b, const std::filesystem::path& destination) {
     if(std::filesystem::exists(destination))
         throw std::runtime_error("batch output directory already exists");
@@ -891,8 +935,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata")) && !(argc == 4 && (std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --wheel-placement | --component-metadata | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -932,6 +976,8 @@ int main(int argc, char* argv[]) {
         }
         if (argc == 4 && (std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0"))
             exportVertices(output, std::filesystem::path(argv[3]), std::string(argv[2]) == "--vertices-level0");
+        if (argc == 4 && std::string(argv[2]) == "--assembly-metadata")
+            exportAssemblyMetadata(output,std::filesystem::path(argv[3]));
         if (argc == 4 && std::string(argv[2]) == "--batch-mesh")
             exportBatch(output, std::filesystem::path(argv[3]));
         if (argc == 4 && std::string(argv[2]) == "--transforms") {
