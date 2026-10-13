@@ -21,12 +21,13 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge]")
-    door_hinge = "--door-hinge" in args
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors]")
+    both_doors = "--both-doors" in args
+    door_hinge = "--door-hinge" in args or both_doors
     door_closed = "--door-closed" in args
     door_test = "--door-test" in args
     show_panels = "--panels" in args
-    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge")]
+    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge", "--both-doors")]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -187,6 +188,35 @@ def main():
                     matrix = candidate.matrix_world.copy()
                     candidate.parent = hinge
                     candidate.matrix_world = matrix
+                    if both_doors:
+                        # Opposite door is a mirrored preview, not yet verified
+                        # against a native right-hand CRP component.
+                        # Mirror the entire closed-door transform across X,
+                        # then parent to an independent, mirrored front hinge.
+                        from mathutils import Matrix
+                        opposite = candidate.copy()
+                        opposite.data = candidate.data
+                        opposite.name = "013_DoorOut_Opposite_MIRRORED_TEST"
+                        collection.objects.link(opposite)
+                        opposite.parent = None
+                        bpy.context.view_layer.update()
+                        reflection = Matrix.Diagonal((-1.0, 1.0, 1.0, 1.0))
+                        opposite_world = reflection @ candidate.matrix_world
+                        right_hinge = bpy.data.objects.new("HINGE_993_OppositeDoor_MIRRORED_TEST", None)
+                        collection.objects.link(right_hinge)
+                        right_hinge.parent = root
+                        right_hinge.location = (-hinge.location.x, hinge.location.y, hinge.location.z)
+                        right_hinge.empty_display_type = 'ARROWS'
+                        right_hinge.empty_display_size = 0.22
+                        right_hinge["hinge_status"] = "mirrored test; NOT decoded as an original right door"
+                        right_hinge["hinge_axis"] = "Blender Z (vertical)"
+                        bpy.context.view_layer.update()
+                        opposite.parent = right_hinge
+                        opposite.matrix_world = opposite_world
+                        opposite.hide_set(False)
+                        opposite.hide_render = False
+                        opposite["crp_mirrored_hypothesis"] = True
+                        print("OPPOSITE DOOR: mirrored geometry and independent A-pillar hinge (unverified).")
                     print(f"DOOR HINGE candidate at {tuple(round(x, 4) for x in hinge.location)}")
                     print("Rotate HINGE_993_LeftDoor_CLOSED_REFERENCE around local Z to open.")
                     print("Rotation Z = 0 is the verified closed reference; axis and pivot provisional.")
