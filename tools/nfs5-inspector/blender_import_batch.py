@@ -167,11 +167,11 @@ def main():
                 if door_hinge:
                     # Compute the front edge from the actual *closed* geometry,
                     # then put an independent hinge at the A-pillar side.
-                    # Car front is -Y; hinge rotates around Blender vertical Z.
+                    # For this calibrated door the A-pillar/front hinge is at maximum Y.
                     from mathutils import Vector
                     bpy.context.view_layer.update()
                     bounds = [candidate.matrix_world @ Vector(c) for c in candidate.bound_box]
-                    front_y = min(point.y for point in bounds)
+                    front_y = max(point.y for point in bounds)
                     low_z = min(point.z for point in bounds)
                     high_z = max(point.z for point in bounds)
                     hinge = bpy.data.objects.new("HINGE_993_LeftDoor_CLOSED_REFERENCE", None)
