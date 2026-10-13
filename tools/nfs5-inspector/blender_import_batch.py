@@ -21,13 +21,14 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors | --bonnet-test]")
+    bonnet_test = "--bonnet-test" in args
     both_doors = "--both-doors" in args
     door_hinge = "--door-hinge" in args or both_doors
     door_closed = "--door-closed" in args
     door_test = "--door-test" in args
     show_panels = "--panels" in args
-    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge", "--both-doors")]
+    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge", "--both-doors", "--bonnet-test")]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -226,6 +227,41 @@ def main():
                 print("DOOR calibrated closed preview visible." if door_closed else "DOOR translated test visible. Original door under hinge remains hidden.")
         else:
             print("DOOR TEST: article 13 absent; verify batch and metadata.")
+
+    if bonnet_test:
+        # Article 28: visually isolate two hypotheses without modifying raw
+        # mesh data. Raw-only is retained hidden; translation-only is visible.
+        # Do not assume these represent the actual closed/open positions.
+        bonnet_pieces = panels.get(28, [])
+        if bonnet_pieces:
+            for raw in bonnet_pieces:
+                raw.hide_set(True)
+                raw.hide_render = True
+                pivot = raw["crp_pivot"]
+                mapped = (pivot[0], pivot[2], pivot[1])
+                bounds = [raw.data.vertices[i].co for i in range(len(raw.data.vertices))]
+                if bounds:
+                    lo = tuple(min(vertex[k] for vertex in bounds) for k in range(3))
+                    hi = tuple(max(vertex[k] for vertex in bounds) for k in range(3))
+                    print(f"BONNET 28 raw local bounds: {lo} .. {hi}")
+                    print(f"BONNET 28 raw CRP pivot: {tuple(pivot)}")
+                    print(f"BONNET 28 mapped pivot: {mapped}")
+                    print(f"BONNET 28 translation-only bounds: {tuple(lo[k]+mapped[k] for k in range(3))} .. {tuple(hi[k]+mapped[k] for k in range(3))}")
+                candidate = raw.copy()
+                candidate.data = raw.data
+                candidate.name = "028_HoodOut_TRANSLATED_TEST"
+                collection.objects.link(candidate)
+                candidate.parent = root
+                candidate.matrix_parent_inverse.identity()
+                candidate.location = mapped
+                candidate.rotation_euler = (0.0, 0.0, 0.0)
+                candidate.scale = (1.0, 1.0, 1.0)
+                candidate["bonnet_translation_hypothesis"] = True
+                candidate.hide_set(False)
+                candidate.hide_render = False
+            print("BONNET: translated test copy visible; rotation and closed placement unverified.")
+        else:
+            print("BONNET TEST: missing article 28; check batch and metadata.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
