@@ -2,11 +2,12 @@
 
 Generate assembly-metadata.csv via nfs5-inspector --assembly-metadata first.
 Run:
-  blender --python tools/nfs5-inspector/blender_import_batch.py -- /tmp/project-porsche/batch-v2
+  blender --python tools/nfs5-inspector/blender_import_batch.py -- ~/gitHub/project-porsche/batch
 Original game resources stay local and must not be committed.
 """
 import bpy
 import csv
+import math
 import sys
 from pathlib import Path
 
@@ -26,7 +27,13 @@ def main():
 
     collection = bpy.data.collections.new("NFS5 Porsche 993 - components")
     bpy.context.scene.collection.children.link(collection)
-    initially_visible = {5, 13, 20, 28, 36}
+    # CRP is Y-up, while Blender uses Z-up. One root transform rotates
+    # both mesh vertices and CRP component translations consistently.
+    root = bpy.data.objects.new("Porsche_993_CRP_to_Blender", None)
+    collection.objects.link(root)
+    root.rotation_euler.x = math.pi / 2
+    root["coordinate_conversion"] = "CRP(x,y,z) -> Blender(x,-z,y)"
+    initially_visible = {5, 20}  # hide movable panels for alignment
     # The TypeIndex=1 wheel meshes are variants, not left/right positions.
     # Opposite-side mirroring is an unverified reconstruction hypothesis.
     wheels = {}
@@ -53,6 +60,7 @@ def main():
                 for old in list(obj.users_collection):
                     old.objects.unlink(obj)
                 collection.objects.link(obj)
+                obj.parent = root
                 info = meta.get(index)
                 obj["crp_article"] = index
                 obj["crp_name"] = row["name"]
@@ -79,6 +87,7 @@ def main():
         mirror.data = source.data
         mirror.name = f"{index:03d}_{label}_opposite_TEST_MIRROR"
         collection.objects.link(mirror)
+        mirror.parent = root
         mirror.location.x = -source.location.x
         mirror.scale.x = -source.scale.x
         mirror["crp_mirrored_hypothesis"] = True
@@ -87,7 +96,8 @@ def main():
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
-    print("Door/hood pivots are preserved as custom properties; animation not applied.")
+    print("CRP Y-up -> Blender Z-up conversion applied via parent root.")
+    print("Door/hood pivots preserved as properties; movable panels hidden.")
 
 
 if __name__ == "__main__":
