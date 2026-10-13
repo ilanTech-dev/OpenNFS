@@ -18,9 +18,10 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test]")
+    door_test = "--door-test" in args
     show_panels = "--panels" in args
-    args = [item for item in args if item != "--panels"]
+    args = [item for item in args if item not in ("--panels", "--door-test")]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -31,8 +32,7 @@ def main():
 
     collection = bpy.data.collections.new("NFS5 Porsche 993 - components")
     bpy.context.scene.collection.children.link(collection)
-    # CRP is Y-up, while Blender uses Z-up. One root transform rotates
-    # both mesh vertices and CRP component translations consistently.
+    # OBJ vertices are already correctly oriented; remap only CRP translations.
     root = bpy.data.objects.new("Porsche_993_CRP_to_Blender", None)
     collection.objects.link(root)
     root.rotation_euler = (0.0, 0.0, 0.0)
@@ -108,7 +108,7 @@ def main():
     # Rotating a hinge is deliberately exploratory until panel geometry
     # coordinate conventions and hinge axes are verified.
     bpy.context.view_layer.update()
-    from mathutils import Matrix
+    from mathutils import Vector
     for index, label in PANEL_ARTICLES.items():
         pieces = panels.get(index, [])
         if not pieces:
@@ -129,6 +129,42 @@ def main():
             obj.matrix_world = old_world
             obj.hide_set(not show_panels)
             obj.hide_render = not show_panels
+
+    if door_test:
+        # Door-only A/B test: retain the raw hinge assembly but hide it.
+        # Show an independent linked-mesh preview translated by the mapped
+        # CRP component matrix. No modification to exported geometry.
+        door_pieces = panels.get(13, [])
+        if door_pieces:
+            raw = door_pieces[0]
+            raw_coords = [raw.data.vertices[i].co for i in range(len(raw.data.vertices))]
+            if raw_coords:
+                bounds_lo = tuple(min(v[k] for v in raw_coords) for k in range(3))
+                bounds_hi = tuple(max(v[k] for v in raw_coords) for k in range(3))
+                pivot = raw["crp_pivot"]
+                mapped = (pivot[0], pivot[2], pivot[1])
+                print(f"DOOR article 13 raw local vertex bounds: {bounds_lo} .. {bounds_hi}")
+                print(f"DOOR article 13 CRP pivot: {tuple(pivot)}; mapped Blender: {mapped}")
+                print("DOOR hypothesis: translated bounds = raw bounds + mapped pivot")
+                print(f"DOOR hypothesis bounds: {tuple(bounds_lo[k]+mapped[k] for k in range(3))} .. {tuple(bounds_hi[k]+mapped[k] for k in range(3))}")
+                candidate = raw.copy()
+                candidate.data = raw.data
+                candidate.name = "013_DoorOut_TRANSLATED_TEST"
+                collection.objects.link(candidate)
+                candidate.parent = root
+                candidate.matrix_parent_inverse.identity()
+                candidate.location = mapped
+                candidate.rotation_euler = (0, 0, 0)
+                candidate.scale = (1, 1, 1)
+                candidate["crp_translation_test"] = True
+                candidate.hide_set(False)
+                candidate.hide_render = False
+                for original in door_pieces:
+                    original.hide_set(True)
+                    original.hide_render = True
+                print("DOOR translated test visible. Original door under hinge remains hidden.")
+        else:
+            print("DOOR TEST: article 13 absent; verify batch and metadata.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
