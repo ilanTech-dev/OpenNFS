@@ -14,6 +14,8 @@ WHEEL_FORWARD_PREVIEW_OFFSET = 0.10  # Blender Y, visually calibrated on 993; un
 PANEL_ARTICLES = {13: "LeftDoor", 28: "Bonnet", 4: "RearLid"}
 DOOR_993_CLOSED_POSITION = (0.73996, 0.84666, 0.70045)
 DOOR_993_CLOSED_ROTATION = (math.pi / 2, 0.0, 0.0)
+BONNET_993_CLOSED_POSITION = (0.0, 0.6854, 0.83123)
+BONNET_993_CLOSED_ROTATION = (math.pi / 2, 0.0, 0.0)
 from pathlib import Path
 
 
@@ -21,14 +23,15 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors | --bonnet-test]")
-    bonnet_test = "--bonnet-test" in args
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors | --bonnet-test | --bonnet-hinge]")
+    bonnet_hinge = "--bonnet-hinge" in args
+    bonnet_test = "--bonnet-test" in args or bonnet_hinge
     both_doors = "--both-doors" in args
     door_hinge = "--door-hinge" in args or both_doors
     door_closed = "--door-closed" in args
     door_test = "--door-test" in args
     show_panels = "--panels" in args
-    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge", "--both-doors", "--bonnet-test")]
+    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge", "--both-doors", "--bonnet-test", "--bonnet-hinge")]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -253,13 +256,38 @@ def main():
                 collection.objects.link(candidate)
                 candidate.parent = root
                 candidate.matrix_parent_inverse.identity()
-                candidate.location = mapped
-                candidate.rotation_euler = (0.0, 0.0, 0.0)
+                candidate.location = BONNET_993_CLOSED_POSITION if bonnet_hinge else mapped
+                candidate.rotation_euler = BONNET_993_CLOSED_ROTATION if bonnet_hinge else (0.0, 0.0, 0.0)
                 candidate.scale = (1.0, 1.0, 1.0)
-                candidate["bonnet_translation_hypothesis"] = True
+                candidate["bonnet_translation_hypothesis"] = not bonnet_hinge
                 candidate.hide_set(False)
                 candidate.hide_render = False
-            print("BONNET: translated test copy visible; rotation and closed placement unverified.")
+                if bonnet_hinge:
+                    # Windscreen-facing edge is the rear of the closed bonnet:
+                    # vehicle front is +Y, so the hinge goes at minimum Y.
+                    bpy.context.view_layer.update()
+                    world_bounds = [candidate.matrix_world @ Vector(c) for c in candidate.bound_box]
+                    rear_y = min(p.y for p in world_bounds)
+                    mid_z = (min(p.z for p in world_bounds) + max(p.z for p in world_bounds)) / 2
+                    hinge = bpy.data.objects.new("HINGE_993_Bonnet_CLOSED_REFERENCE", None)
+                    collection.objects.link(hinge)
+                    hinge.parent = root
+                    hinge.location = (0.0, rear_y, mid_z)
+                    hinge.empty_display_type = 'ARROWS'
+                    hinge.empty_display_size = 0.25
+                    hinge["hinge_axis"] = "Blender X (across car)"
+                    hinge["hinge_status"] = "estimated from closed bonnet rear bounding edge"
+                    hinge["closed_angle_degrees"] = 0.0
+                    bpy.context.view_layer.update()
+                    closed_world = candidate.matrix_world.copy()
+                    candidate.parent = hinge
+                    candidate.matrix_world = closed_world
+                    print(f"BONNET HINGE candidate at {tuple(round(v, 5) for v in hinge.location)}")
+                    print("Rotate HINGE_993_Bonnet_CLOSED_REFERENCE around X, e.g. +/-35 deg")
+            if bonnet_hinge:
+                print("BONNET: calibrated closed position with adjustable rear hinge (test).")
+            else:
+                print("BONNET: translated test copy visible; rotation and closed placement unverified.")
         else:
             print("BONNET TEST: missing article 28; check batch and metadata.")
 
