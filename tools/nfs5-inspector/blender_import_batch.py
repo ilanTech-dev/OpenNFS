@@ -23,7 +23,8 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors | --bonnet-test | --bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors | --bonnet-test | --bonnet-hinge | --rear-lid-test]")
+    rear_lid_test = "--rear-lid-test" in args
     bonnet_hinge = "--bonnet-hinge" in args
     bonnet_test = "--bonnet-test" in args or bonnet_hinge
     both_doors = "--both-doors" in args
@@ -31,7 +32,7 @@ def main():
     door_closed = "--door-closed" in args
     door_test = "--door-test" in args
     show_panels = "--panels" in args
-    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge", "--both-doors", "--bonnet-test", "--bonnet-hinge")]
+    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed", "--door-hinge", "--both-doors", "--bonnet-test", "--bonnet-hinge", "--rear-lid-test")]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -290,6 +291,42 @@ def main():
                 print("BONNET: translated test copy visible; rotation and closed placement unverified.")
         else:
             print("BONNET TEST: missing article 28; check batch and metadata.")
+
+    if rear_lid_test:
+        # Isolate article 4 without guessing closed positioning or hinge axis.
+        # As with the first bonnet test, compare untranslated and CRP-mapped
+        # translation candidates using the same exported mesh data.
+        rear_pieces = panels.get(4, [])
+        if not rear_pieces:
+            print("REAR LID TEST: article 4 missing; check OBJ batch and metadata.")
+        for raw in rear_pieces:
+            raw.hide_set(True)
+            raw.hide_render = True
+            point = raw["crp_pivot"]
+            mapped = (point[0], point[2], point[1])
+            vertices = [v.co for v in raw.data.vertices]
+            if not vertices:
+                print("REAR LID TEST: article 4 has no vertices")
+                continue
+            lo = tuple(min(v[k] for v in vertices) for k in range(3))
+            hi = tuple(max(v[k] for v in vertices) for k in range(3))
+            print(f"REAR LID 4 raw local bounds: {lo} .. {hi}")
+            print(f"REAR LID 4 raw CRP pivot: {tuple(point)}")
+            print(f"REAR LID 4 mapped pivot: {mapped}")
+            print(f"REAR LID 4 translation-only bounds: {tuple(lo[k]+mapped[k] for k in range(3))} .. {tuple(hi[k]+mapped[k] for k in range(3))}")
+            candidate = raw.copy()
+            candidate.data = raw.data
+            candidate.name = "004_TrunkOut2_TRANSLATED_TEST"
+            collection.objects.link(candidate)
+            candidate.parent = root
+            candidate.matrix_parent_inverse.identity()
+            candidate.location = mapped
+            candidate.rotation_euler = (0.0, 0.0, 0.0)
+            candidate.scale = (1.0, 1.0, 1.0)
+            candidate["rear_lid_translation_hypothesis"] = True
+            candidate.hide_set(False)
+            candidate.hide_render = False
+        print("REAR LID: translation-only candidate visible; lid/spoiler geometry variants not yet resolved.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
