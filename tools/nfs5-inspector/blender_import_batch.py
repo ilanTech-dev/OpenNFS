@@ -7,10 +7,13 @@ Original game resources stay local and must not be committed.
 """
 import bpy
 import csv
+import math
 import sys
 
 WHEEL_FORWARD_PREVIEW_OFFSET = 0.10  # Blender Y, visually calibrated on 993; unverified CRP rule
 PANEL_ARTICLES = {13: "LeftDoor", 28: "Bonnet", 4: "RearLid"}
+DOOR_993_CLOSED_POSITION = (0.73996, 0.84666, 0.70045)
+DOOR_993_CLOSED_ROTATION = (math.pi / 2, 0.0, 0.0)
 from pathlib import Path
 
 
@@ -18,10 +21,11 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed]")
+    door_closed = "--door-closed" in args
     door_test = "--door-test" in args
     show_panels = "--panels" in args
-    args = [item for item in args if item not in ("--panels", "--door-test")]
+    args = [item for item in args if item not in ("--panels", "--door-test", "--door-closed")]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -130,7 +134,7 @@ def main():
             obj.hide_set(not show_panels)
             obj.hide_render = not show_panels
 
-    if door_test:
+    if door_test or door_closed:
         # Door-only A/B test: retain the raw hinge assembly but hide it.
         # Show an independent linked-mesh preview translated by the mapped
         # CRP component matrix. No modification to exported geometry.
@@ -153,8 +157,8 @@ def main():
                 collection.objects.link(candidate)
                 candidate.parent = root
                 candidate.matrix_parent_inverse.identity()
-                candidate.location = mapped
-                candidate.rotation_euler = (0, 0, 0)
+                candidate.location = DOOR_993_CLOSED_POSITION if door_closed else mapped
+                candidate.rotation_euler = DOOR_993_CLOSED_ROTATION if door_closed else (0, 0, 0)
                 candidate.scale = (1, 1, 1)
                 candidate["crp_translation_test"] = True
                 candidate.hide_set(False)
@@ -162,7 +166,7 @@ def main():
                 for original in door_pieces:
                     original.hide_set(True)
                     original.hide_render = True
-                print("DOOR translated test visible. Original door under hinge remains hidden.")
+                print("DOOR calibrated closed preview visible." if door_closed else "DOOR translated test visible. Original door under hinge remains hidden.")
         else:
             print("DOOR TEST: article 13 absent; verify batch and metadata.")
 
