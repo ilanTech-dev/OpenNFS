@@ -630,8 +630,10 @@ void inspectComponentMetadata(const Bytes& b) {
             if(rel>b.size()-p||bytes>b.size()-p-rel)continue;
             const std::size_t start=p+rel;
             if(b[p+2]=='a'&&b[p+3]=='B') {
-                if(bytes<16){std::cout<<"  Base payload too short: "<<bytes<<"\n";continue;}
-                auto v=[&](int i){return unsigned(b[start+i]);};
+                if(bytes<100){std::cout<<"  Base payload too short: "<<bytes<<"\n";continue;}
+                // CBase::Read: flags(16) + hasFloats(4) + floats(48) = 68.
+                const std::size_t infoStart=start+68;
+                auto v=[&](int i){return unsigned(b[infoStart+i]);};
                 std::cout<<"  Base: geomIndex="<<v(0)<<" typeIndex="<<v(1)
                          <<" geomPlace="<<v(3)<<" wheelType="<<v(4)
                          <<" extraType="<<v(5)<<" textureType="<<v(6)
