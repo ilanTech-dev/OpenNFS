@@ -8,6 +8,9 @@ Original game resources stay local and must not be committed.
 import bpy
 import csv
 import sys
+
+WHEEL_FORWARD_PREVIEW_OFFSET = 0.10  # Blender Y, visually calibrated on 993; unverified CRP rule
+PANEL_ARTICLES = {13: "LeftDoor", 28: "Bonnet", 4: "RearLid"}
 from pathlib import Path
 
 
@@ -15,7 +18,9 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels]")
+    show_panels = "--panels" in args
+    args = [item for item in args if item != "--panels"]
     batch = Path(args[0]).expanduser()
     manifest = batch / "manifest.csv"
     metadata = Path(args[1]).expanduser() if len(args) > 1 else batch / "assembly-metadata.csv"
@@ -36,6 +41,7 @@ def main():
     # The TypeIndex=1 wheel meshes are variants, not left/right positions.
     # Opposite-side mirroring is an unverified reconstruction hypothesis.
     wheels = {}
+    panels = {}
     imported = missing = 0
     with manifest.open(newline="") as stream:
         for row in csv.DictReader(stream):
@@ -69,12 +75,14 @@ def main():
                         obj["crp_" + key] = int(info[key])
                     if int(info["has_transform"]):
                         obj["crp_pivot"] = [float(info[key]) for key in ("tx", "ty", "tz")]
-                visible = index in initially_visible or index in (46, 47)
+                visible = index in initially_visible or index in (46, 47) or (show_panels and index in PANEL_ARTICLES)
                 obj.hide_set(not visible)
                 obj.hide_render = not visible
                 if index in (46, 47) and info and int(info["has_transform"]):
-                    obj.location = (float(info["tx"]), float(info["tz"]), float(info["ty"]))
+                    obj.location = (float(info["tx"]), float(info["tz"]) + WHEEL_FORWARD_PREVIEW_OFFSET, float(info["ty"]))
                     wheels[index] = obj
+                if index in PANEL_ARTICLES and info and int(info["has_transform"]):
+                    panels.setdefault(index, []).append(obj)
             imported += 1
 
     for index, label in ((46, "Front"), (47, "Rear")):
@@ -93,10 +101,41 @@ def main():
         mirror.hide_set(False)
         mirror.hide_render = False
 
+    # Panel meshes appear to use mixed conventions. Do not change their raw
+    # vertices or add their pivots as another translation. Instead create
+    # independent hinge empties at candidate CRP pivots; parenting with a
+    # preserved world matrix leaves the closed geometry exactly where it was.
+    # Rotating a hinge is deliberately exploratory until panel geometry
+    # coordinate conventions and hinge axes are verified.
+    bpy.context.view_layer.update()
+    from mathutils import Matrix
+    for index, label in PANEL_ARTICLES.items():
+        pieces = panels.get(index, [])
+        if not pieces:
+            print(f"Panel {index} {label}: missing mesh or transform; skipped hinge")
+            continue
+        point = pieces[0]["crp_pivot"]
+        hinge = bpy.data.objects.new(f"HINGE_TEST_{label}_{index:03d}", None)
+        collection.objects.link(hinge)
+        hinge.parent = root
+        hinge.location = (point[0], point[2], point[1])
+        hinge["crp_article"] = index
+        hinge["crp_pivot"] = list(point)
+        hinge["experimental_hinge"] = True
+        bpy.context.view_layer.update()
+        for obj in pieces:
+            old_world = obj.matrix_world.copy()
+            obj.parent = hinge
+            obj.matrix_world = old_world
+            obj.hide_set(not show_panels)
+            obj.hide_render = not show_panels
+
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
     print("Mesh coordinates unchanged; wheel translation Y/Z swapped.")
-    print("Door/hood pivots preserved as properties; movable panels hidden.")
+    print(f"Wheel longitudinal calibration: +{WHEEL_FORWARD_PREVIEW_OFFSET:.2f} Blender Y (provisional)")
+    print("Hinge test empties created for door/bonnet/rear lid; rotate to experiment.")
+    print(f"Panel display: {'enabled' if show_panels else 'hidden'} (use --panels to display).")
 
 
 if __name__ == "__main__":
