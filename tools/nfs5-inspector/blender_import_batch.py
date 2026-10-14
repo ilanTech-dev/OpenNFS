@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--lid-underside-compare] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -35,6 +35,9 @@ def main():
         value = choices[args[index + 1]]
         del args[index:index + 2]
         return value
+    underside_compare = "--lid-underside-compare" in args
+    if underside_compare:
+        args.remove("--lid-underside-compare")
     chosen_lid = take_option("--lid-type", lid_choices)
     chosen_spoiler = take_option("--spoiler", spoiler_choices)
     rear_lid_test = "--rear-lid-test" in args
@@ -381,6 +384,39 @@ def main():
                 copy.hide_set(False)
                 copy.hide_render = False
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
+
+    if underside_compare:
+        # Show identical placement/orientation for the two potential standard lids.
+        # Hide the entire car to allow underside inspection without occlusion.
+        for obj in collection.objects:
+            if obj.type == 'MESH':
+                obj.hide_set(True)
+                obj.hide_render = True
+        for article, offset, label in (
+            (6, -1.05, "TYPE0_BASIC"),
+            (39, 1.05, "TYPE1_DETAILED"),
+        ):
+            for raw in rear_variants.get(article, []):
+                pivot = raw.get("crp_pivot")
+                if pivot is None:
+                    print(f"WARNING: underside compare: missing pivot for article {article}")
+                    continue
+                candidate = raw.copy()
+                candidate.data = raw.data
+                candidate.name = f"COMPARE_UNDERSIDE_{article:03d}_{label}"
+                collection.objects.link(candidate)
+                candidate.parent = root
+                candidate.matrix_parent_inverse.identity()
+                candidate.location = (float(pivot[0]) + offset, float(pivot[2]), float(pivot[1]))
+                candidate.rotation_euler = (math.pi / 2, 0.0, 0.0)
+                candidate.scale = (1.0, 1.0, 1.0)
+                candidate["comparison_role"] = label
+                candidate["pose_status"] = "same provisional orientation; X offset only"
+                candidate.hide_set(False)
+                candidate.hide_render = False
+        print("LID UNDERSIDE COMPARE: article 6 at X=-1.05, article 39 at X=+1.05.")
+        print("All other meshes hidden. Orbit Blender view underneath to compare underside faces.")
+        print("Candidate positions use provisional mapping, not calibrated showroom-open poses.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
