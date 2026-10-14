@@ -863,6 +863,88 @@ void inspectParts(const Bytes& b) {
 }
 
 
+void inspectRearMeshGroups(const Bytes& b) {
+    const std::size_t n=read32le(b,4)>>5,dir=std::size_t(read32le(b,12))*16;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("invalid article directory");
+    for(std::size_t article: {std::size_t(6),std::size_t(39),std::size_t(4)}) {
+        if(article>=n)continue;
+        const std::size_t at=dir+article*16,rel=read32le(b,at+12),len=read32le(b,at+8);
+        if(rel>(b.size()-at)/16)throw std::runtime_error("invalid article offset");
+        const std::size_t begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("invalid article length");
+        const std::size_t end=begin+len*16;
+        std::size_t vertices=0,vertexStart=0,bufferCount=0;
+        for(std::size_t p=begin;p<end;p+=16) {
+            if(b[p+2]!='t'||b[p+3]!='v')continue;
+            const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            const std::size_t size=read32le(b,p+4)>>8,count=read32le(b,p+8),off=read32le(b,p+12);
+            if(info!=1||!count||count>SIZE_MAX/16||size!=count*16||off>b.size()-p||size>b.size()-p-off)continue;
+            vertexStart=p+off;vertices=count;++bufferCount;
+        }
+        std::cout<<"Article "<<article<<" "<<articleName(b,article)
+                 <<" level1 vertex buffers="<<bufferCount<<" vertex count="<<vertices<<"\n";
+        if(bufferCount!=1)continue;
+        auto coordinate=[&](std::size_t idx,int axis) {
+            const auto bits=read32le(b,vertexStart+idx*16+axis*4);
+            float value;std::memcpy(&value,&bits,4);return value;
+        };
+        std::size_t group=0;
+        for(std::size_t p=begin;p<end;p+=16) {
+            if(b[p+2]!='r'||b[p+3]!='p')continue;
+            const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if((info>>12)!=1)continue;
+            ++group;
+            const std::size_t size=read32le(b,p+4)>>8,count=read32le(b,p+8),off=read32le(b,p+12);
+            std::cout<<"  group "<<group<<" descriptor=0x"<<std::hex<<info<<std::dec
+                     <<" triangles="<<count/3;
+            if(off>b.size()-p||size>b.size()-p-off||size<48||count%3) {
+                std::cout<<" INVALID descriptor\n";continue;
+            }
+            const std::size_t base=p+off,infos=read32le(b,base+40),streams=read32le(b,base+44);
+            if(infos>(size-48)/16||streams>(size-48-infos*16)/8||streams==0) {
+                std::cout<<" INVALID tables\n";continue;
+            }
+            const std::size_t data=48+infos*16+streams*8;
+            if(count>(size-data)/streams) {std::cout<<" INVALID stream data\n";continue;}
+            std::size_t indexOffset=SIZE_MAX,adjust=SIZE_MAX;
+            for(std::size_t k=0;k<streams;++k){
+                const auto q=base+48+infos*16+k*8;
+                const unsigned id=unsigned(b[q+2])|(unsigned(b[q+3])<<8);
+                if(id==0x4976)indexOffset=read32le(b,q+4);
+            }
+            for(std::size_t k=0;k<infos;++k){
+                const auto q=base+48+k*16;
+                const unsigned id=unsigned(b[q+10])|(unsigned(b[q+11])<<8);
+                const unsigned level=unsigned(b[q+12])|(unsigned(b[q+13])<<8);
+                if(id==0&&level==1&&read32le(b,q+4)%16==0)
+                    adjust=read32le(b,q+4)/16;
+            }
+            if(indexOffset==SIZE_MAX||adjust==SIZE_MAX||indexOffset>size-data||count>size-data-indexOffset){
+                std::cout<<" INVALID offsets\n";continue;
+            }
+            float lo[3]={INFINITY,INFINITY,INFINITY},hi[3]={-INFINITY,-INFINITY,-INFINITY};
+            std::size_t minIndex=SIZE_MAX,maxIndex=0;
+            bool valid=true;
+            for(std::size_t k=0;k<count;++k){
+                const std::size_t idx=std::size_t(b[base+data+indexOffset+k])+adjust;
+                if(idx>=vertices){valid=false;break;}
+                minIndex=std::min(minIndex,idx);maxIndex=std::max(maxIndex,idx);
+                for(int axis=0;axis<3;++axis){
+                    const float value=coordinate(idx,axis);
+                    if(!std::isfinite(value)){valid=false;break;}
+                    lo[axis]=std::min(lo[axis],value);hi[axis]=std::max(hi[axis],value);
+                }
+                if(!valid)break;
+            }
+            if(!valid){std::cout<<" INVALID vertex indices/coordinates\n";continue;}
+            std::cout<<" vertexSpan="<<minIndex<<".."<<maxIndex
+                     <<" X="<<lo[0]<<".."<<hi[0]
+                     <<" Y="<<lo[1]<<".."<<hi[1]
+                     <<" Z="<<lo[2]<<".."<<hi[2]<<"\n";
+        }
+    }
+}
+
 void inspectPolygons(const Bytes& b, std::size_t articleIndex) {
     if (b.size() < 16) throw std::runtime_error("CRP header too short");
     const std::size_t count = read32le(b, 4) >> 5;
@@ -1001,8 +1083,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--rear-lid-compare")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --rear-lid-compare | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --rear-lid-compare | --rear-mesh-groups | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1025,6 +1107,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--wheel-placement") inspectWheelPlacement(output);
         if (argc == 3 && std::string(argv[2]) == "--component-metadata") inspectComponentMetadata(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
+        if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
         if (argc == 5 && std::string(argv[2]) == "--article-mesh") {
