@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--lid-underside-compare] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--lid-underside-compare] [--rear-lid-hinge] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -35,10 +35,17 @@ def main():
         value = choices[args[index + 1]]
         del args[index:index + 2]
         return value
+    rear_hinge = "--rear-lid-hinge" in args
+    if rear_hinge:
+        args.remove("--rear-lid-hinge")
     underside_compare = "--lid-underside-compare" in args
     if underside_compare:
         args.remove("--lid-underside-compare")
     chosen_lid = take_option("--lid-type", lid_choices)
+    if rear_hinge and chosen_lid is not None and chosen_lid != 39:
+        raise SystemExit("--rear-lid-hinge currently supports only article 39 (--lid-type 1)")
+    if rear_hinge:
+        chosen_lid = 39
     chosen_spoiler = take_option("--spoiler", spoiler_choices)
     rear_lid_test = "--rear-lid-test" in args
     bonnet_hinge = "--bonnet-hinge" in args
@@ -384,6 +391,40 @@ def main():
                 copy.hide_set(False)
                 copy.hide_render = False
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
+
+    if rear_hinge:
+        # Article 39 is an *experimental* opening-lid candidate. Its closed
+        # pose has not been aligned to the body: this is a reversible rig.
+        # Hide any other lid preview and place article 39 with its level-1
+        # CRP mapped translation, as in --lid-type 1.
+        candidates = [obj for obj in collection.objects
+                      if obj.get("crp_variant_group") == "lid"
+                      and obj.get("crp_variant_article") == 39]
+        if not candidates:
+            print("REAR HINGE: no article 39 preview available")
+        for candidate in candidates:
+            bpy.context.view_layer.update()
+            bounds = [candidate.matrix_world @ Vector(c) for c in candidate.bound_box]
+            # Engine is at the rear; the windscreen-facing edge is minimum
+            # Blender Y in the current provisional vehicle orientation.
+            hinge_y = min(p.y for p in bounds)
+            hinge_z = (min(p.z for p in bounds) + max(p.z for p in bounds)) / 2
+            hinge = bpy.data.objects.new("HINGE_993_RearLid39_PROVISIONAL", None)
+            collection.objects.link(hinge)
+            hinge.parent = root
+            hinge.location = (0.0, hinge_y, hinge_z)
+            hinge.empty_display_type = 'ARROWS'
+            hinge.empty_display_size = 0.25
+            hinge["hinge_axis"] = "Blender X"
+            hinge["hinge_status"] = "provisional front/min-Y panel edge; closed fit not calibrated"
+            hinge["rest_angle_degrees"] = 0.0
+            bpy.context.view_layer.update()
+            rest_world = candidate.matrix_world.copy()
+            candidate.parent = hinge
+            candidate.matrix_world = rest_world
+            print(f"REAR HINGE: article 39 pivot at {tuple(round(v, 5) for v in hinge.location)}")
+            print("Rotate hinge around local X, try +/-30 degrees; inspect collisions.")
+        print("REAR HINGE: rest pose uncalibrated; original CRP articles unchanged.")
 
     if underside_compare:
         # Show identical placement/orientation for the two potential standard lids.
