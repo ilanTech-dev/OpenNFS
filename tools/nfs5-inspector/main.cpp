@@ -945,6 +945,57 @@ void inspectRearMeshGroups(const Bytes& b) {
     }
 }
 
+void inspectPanelAnimationRecords(const Bytes& b) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
+    // Compare known showroom-capable panels against competing rear-lid variants.
+    for(std::size_t article: {std::size_t(13),std::size_t(28),std::size_t(6),
+                               std::size_t(39),std::size_t(4),std::size_t(52),std::size_t(53)}) {
+        if(article>=n)continue;
+        const std::size_t at=dir+article*16;
+        const std::size_t rel=read32le(b,at+12),len=read32le(b,at+8);
+        if(rel>(b.size()-at)/16)throw std::runtime_error("bad article offset");
+        const std::size_t begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("bad article length");
+        std::cout<<"Article "<<article<<" "<<articleName(b,article)<<"\n";
+        for(std::size_t p=begin;p<begin+len*16;p+=16) {
+            const std::string tag{char(b[p+2]),char(b[p+3])};
+            if(tag!="aB"&&tag!="aN"&&tag!="mn"&&tag!="rt")continue;
+            const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            const std::size_t bytes=read32le(b,p+4)>>8,relative=read32le(b,p+12);
+            if(relative>b.size()-p||bytes>b.size()-p-relative) {
+                std::cout<<"  "<<tag<<" info=0x"<<std::hex<<info<<std::dec<<" BAD RANGE\n";
+                continue;
+            }
+            const std::size_t start=p+relative;
+            std::cout<<"  "<<tag<<" info=0x"<<std::hex<<info<<std::dec
+                     <<" length="<<bytes;
+            if(tag=="aB"&&bytes>=100) {
+                const std::size_t i=start+68;
+                std::cout<<" flags="<<read32le(b,start)
+                         <<" geomIndex="<<unsigned(b[i])
+                         <<" typeIndex="<<unsigned(b[i+1])
+                         <<" geomType="<<unsigned(b[i+7])
+                         <<" animCount="<<unsigned(b[i+8])
+                         <<" animType="<<unsigned(b[i+9]);
+            }
+            if(tag=="rt"&&bytes>=64){
+                auto rd=[&](int k){const auto bits=read32le(b,start+4*k);float x;std::memcpy(&x,&bits,4);return x;};
+                std::cout<<" translation=("<<rd(12)<<","<<rd(13)<<","<<rd(14)<<")";
+            }
+            if(tag=="aN"||tag=="mn") {
+                std::cout<<" prefix=";
+                for(std::size_t k=0;k<std::min<std::size_t>(bytes,32);++k){
+                    if(k)std::cout<<" ";
+                    std::cout<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(b[start+k])<<std::dec;
+                }
+                std::cout<<std::setfill(' ');
+            }
+            std::cout<<"\n";
+        }
+    }
+}
+
 void inspectPolygons(const Bytes& b, std::size_t articleIndex) {
     if (b.size() < 16) throw std::runtime_error("CRP header too short");
     const std::size_t count = read32le(b, 4) >> 5;
@@ -1083,8 +1134,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --rear-lid-compare | --rear-mesh-groups | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --rear-lid-compare | --rear-mesh-groups | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1108,6 +1159,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--component-metadata") inspectComponentMetadata(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
+        if (argc == 3 && std::string(argv[2]) == "--panel-animation-records") inspectPanelAnimationRecords(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
         if (argc == 5 && std::string(argv[2]) == "--article-mesh") {
