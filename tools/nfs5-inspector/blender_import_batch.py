@@ -23,7 +23,20 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--panels | --door-test | --door-closed | --door-hinge | --both-doors | --bonnet-test | --bonnet-hinge | --rear-lid-test]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--both-doors] [--bonnet-hinge]")
+    lid_choices = {"0": 6, "1": 39, "2": 4}
+    spoiler_choices = {"down": 52, "up": 53}
+    def take_option(name, choices):
+        if name not in args:
+            return None
+        index = args.index(name)
+        if index + 1 >= len(args) or args[index + 1] not in choices:
+            raise SystemExit(f"{name} requires one of: {', '.join(choices)}")
+        value = choices[args[index + 1]]
+        del args[index:index + 2]
+        return value
+    chosen_lid = take_option("--lid-type", lid_choices)
+    chosen_spoiler = take_option("--spoiler", spoiler_choices)
     rear_lid_test = "--rear-lid-test" in args
     bonnet_hinge = "--bonnet-hinge" in args
     bonnet_test = "--bonnet-test" in args or bonnet_hinge
@@ -53,6 +66,7 @@ def main():
     # Opposite-side mirroring is an unverified reconstruction hypothesis.
     wheels = {}
     panels = {}
+    rear_variants = {}
     imported = missing = 0
     with manifest.open(newline="") as stream:
         for row in csv.DictReader(stream):
@@ -92,6 +106,8 @@ def main():
                 if index in (46, 47) and info and int(info["has_transform"]):
                     obj.location = (float(info["tx"]), float(info["tz"]) + WHEEL_FORWARD_PREVIEW_OFFSET, float(info["ty"]))
                     wheels[index] = obj
+                if index in (4, 6, 39, 52, 53):
+                    rear_variants.setdefault(index, []).append(obj)
                 if index in PANEL_ARTICLES and info and int(info["has_transform"]):
                     panels.setdefault(index, []).append(obj)
             imported += 1
@@ -327,6 +343,44 @@ def main():
             candidate.hide_set(False)
             candidate.hide_render = False
         print("REAR LID: translation-only candidate visible; lid/spoiler geometry variants not yet resolved.")
+
+    # Component groups decoded from BaseInfo:
+    # lid GeomIndex=16 TypeIndex=0/1/2; spoiler GeomIndex=42 TypeIndex=1/2.
+    # Keep selection independent. This pose is an UNCALIBRATED reference
+    # rotation, not a claim about the original game's default configuration.
+    if chosen_lid is not None or chosen_spoiler is not None:
+        for index in (4, 6, 39, 52, 53):
+            for raw in rear_variants.get(index, []):
+                raw.hide_set(True)
+                raw.hide_render = True
+
+        for group_name, selected in (("lid", chosen_lid), ("spoiler", chosen_spoiler)):
+            if selected is None:
+                continue
+            pieces = rear_variants.get(selected, [])
+            if not pieces:
+                print(f"WARNING: selected {group_name} article {selected} missing from exported batch")
+                continue
+            for raw in pieces:
+                pivot = raw.get("crp_pivot")
+                if pivot is None:
+                    print(f"WARNING: selected {group_name} article {selected} has no CRP pivot")
+                    continue
+                copy = raw.copy()
+                copy.data = raw.data
+                copy.name = f"REAR_{group_name.upper()}_{selected:03d}_REFERENCE_TEST"
+                collection.objects.link(copy)
+                copy.parent = root
+                copy.matrix_parent_inverse.identity()
+                copy.location = (pivot[0], pivot[2], pivot[1])
+                copy.rotation_euler = (math.pi / 2, 0.0, 0.0)
+                copy.scale = (1.0, 1.0, 1.0)
+                copy["crp_variant_group"] = group_name
+                copy["crp_variant_article"] = selected
+                copy["pose_status"] = "uncalibrated; mapped translation and 90-degree X"
+                copy.hide_set(False)
+                copy.hide_render = False
+            print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
