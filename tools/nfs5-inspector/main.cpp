@@ -667,7 +667,9 @@ void compareRearLids(const Bytes& b) {
     for(const std::size_t article: {std::size_t(4),std::size_t(6),std::size_t(39),
                                      std::size_t(52),std::size_t(53)}) {
         if(article>=n)continue;
-        const auto at=dir+article*16,rel=read32le(b,at+12),len=read32le(b,at+8);
+        const std::size_t at=dir+article*16;
+        const std::size_t rel=read32le(b,at+12);
+        const std::size_t len=read32le(b,at+8);
         if(rel>(b.size()-at)/16)throw std::runtime_error("invalid article offset");
         const auto begin=at+rel*16;
         if(len>(b.size()-begin)/16)throw std::runtime_error("invalid article length");
