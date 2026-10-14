@@ -660,6 +660,70 @@ void inspectComponentMetadata(const Bytes& b) {
 }
 
 
+
+void compareRearLids(const Bytes& b) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("invalid directory");
+    for(const std::size_t article: {std::size_t(4),std::size_t(6),std::size_t(39),
+                                     std::size_t(52),std::size_t(53)}) {
+        if(article>=n)continue;
+        const auto at=dir+article*16,rel=read32le(b,at+12),len=read32le(b,at+8);
+        if(rel>(b.size()-at)/16)throw std::runtime_error("invalid article offset");
+        const auto begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("invalid article length");
+        std::map<std::string,std::size_t> tags;
+        std::map<unsigned,std::size_t> polygonLevels;
+        std::cout<<"Article "<<article<<" "<<articleName(b,article)<<"\n";
+        for(std::size_t p=begin;p<begin+len*16;p+=16) {
+            const std::string tag{char(b[p+2]),char(b[p+3])};
+            ++tags[tag];
+            const std::size_t off=read32le(b,p+12),bytes=read32le(b,p+4)>>8;
+            if(off>b.size()-p||bytes>b.size()-p-off)continue;
+            const auto start=p+off;
+            if(tag=="aB") {
+                if(bytes<100)continue;
+                const auto levels=read32le(b,start+12);
+                const auto i=start+68;
+                std::cout<<"  Base flags="<<read32le(b,start)
+                    <<" geomIndex="<<unsigned(b[i])
+                    <<" typeIndex="<<unsigned(b[i+1])
+                    <<" geomPlace="<<unsigned(b[i+3])
+                    <<" geomType="<<unsigned(b[i+7])
+                    <<" extraType="<<unsigned(b[i+5])
+                    <<" animType="<<unsigned(b[i+9])
+                    <<" levelIndex="<<unsigned(b[i+10])
+                    <<" levelCount="<<levels<<"\n";
+                if(levels<=32&&bytes>=100+levels*12) {
+                    for(std::size_t j=0;j<levels;++j) {
+                        const auto m=start+100+j*12;
+                        const auto level=unsigned(b[m+8])|(unsigned(b[m+9])<<8);
+                        std::cout<<"    levelMask["<<j<<"] level="<<level
+                            <<" min=0x"<<std::hex<<(unsigned(b[m+4])|(unsigned(b[m+5])<<8))
+                            <<" max=0x"<<(unsigned(b[m+6])|(unsigned(b[m+7])<<8))
+                            <<std::dec<<"\n";
+                    }
+                }
+            }
+            if(tag=="rt"&&bytes>=64) {
+                const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+                if(info==1) {
+                    auto fl=[&](int k){const auto bits=read32le(b,start+48+4*k);float x;std::memcpy(&x,&bits,4);return x;};
+                    std::cout<<"  level1 transform=("<<fl(0)<<","<<fl(1)<<","<<fl(2)<<")\n";
+                }
+            }
+            if(tag=="rp"){
+                const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+                ++polygonLevels[info>>12];
+            }
+        }
+        std::cout<<"  tag counts:";
+        for(const auto& item:tags)std::cout<<" "<<item.first<<"="<<item.second;
+        std::cout<<"\n  polygon descriptor levels:";
+        for(const auto& item:polygonLevels)std::cout<<" "<<item.first<<"="<<item.second;
+        std::cout<<"\n";
+    }
+}
+
 void exportAssemblyMetadata(const Bytes& b, const std::filesystem::path& dest) {
     const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article table");
@@ -935,8 +999,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--rear-lid-compare")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --rear-lid-compare | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -958,6 +1022,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--parts") inspectParts(output);
         if (argc == 3 && std::string(argv[2]) == "--wheel-placement") inspectWheelPlacement(output);
         if (argc == 3 && std::string(argv[2]) == "--component-metadata") inspectComponentMetadata(output);
+        if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
         if (argc == 5 && std::string(argv[2]) == "--article-mesh") {
