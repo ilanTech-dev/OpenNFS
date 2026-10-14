@@ -978,10 +978,33 @@ void inspectPanelAnimationRecords(const Bytes& b) {
                          <<" geomType="<<unsigned(b[i+7])
                          <<" animCount="<<unsigned(b[i+8])
                          <<" animType="<<unsigned(b[i+9]);
+                std::cout<<" baseInfoRemaining=";
+                for(std::size_t k=0;k<32&&i+k<start+bytes;++k) {
+                    if(k)std::cout<<" ";
+                    std::cout<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(b[i+k])<<std::dec;
+                }
+                std::cout<<std::setfill(' ');
+                if(bytes>100){
+                    std::cout<<" trailingBaseBytes="<<(bytes-100)<<" trailingPrefix=";
+                    for(std::size_t k=100;k<std::min<std::size_t>(bytes,124);++k) {
+                        if(k!=100)std::cout<<" ";
+                        std::cout<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(b[start+k])<<std::dec;
+                    }
+                    std::cout<<std::setfill(' ');
+                }
             }
             if(tag=="rt"&&bytes>=64){
                 auto rd=[&](int k){const auto bits=read32le(b,start+4*k);float x;std::memcpy(&x,&bits,4);return x;};
                 std::cout<<" translation=("<<rd(12)<<","<<rd(13)<<","<<rd(14)<<")";
+                std::cout<<" basis3x3=[";
+                for(int row=0;row<3;++row){
+                    if(row)std::cout<<";";
+                    for(int col=0;col<3;++col){
+                        if(col)std::cout<<",";
+                        std::cout<<rd(row*4+col);
+                    }
+                }
+                std::cout<<"]";
             }
             if(tag=="aN"||tag=="mn") {
                 std::cout<<" prefix=";
