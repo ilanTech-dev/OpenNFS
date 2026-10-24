@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -35,6 +35,9 @@ def main():
         value = choices[args[index + 1]]
         del args[index:index + 2]
         return value
+    spoiler_compare = "--spoiler-compare" in args
+    if spoiler_compare:
+        args.remove("--spoiler-compare")
     animate_rear_lid = "--animate-rear-lid" in args
     if animate_rear_lid:
         args.remove("--animate-rear-lid")
@@ -51,6 +54,8 @@ def main():
     if rear_hinge:
         chosen_lid = 39
     chosen_spoiler = take_option("--spoiler", spoiler_choices)
+    if spoiler_compare and chosen_spoiler is not None:
+        raise SystemExit("Use --spoiler-compare without --spoiler; both states are included.")
     rear_lid_test = "--rear-lid-test" in args
     bonnet_hinge = "--bonnet-hinge" in args
     bonnet_test = "--bonnet-test" in args or bonnet_hinge
@@ -408,6 +413,37 @@ def main():
                 copy.hide_set(False)
                 copy.hide_render = False
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
+
+    if spoiler_compare:
+        # Both spoiler states share the level-1 CRP translation. Compare the
+        # geometry in the same provisional rear-deck pose; never infer a
+        # mechanical hinge or interpolation from distinct mesh states.
+        for index in (52, 53):
+            pieces = rear_variants.get(index, [])
+            if not pieces:
+                print(f"WARNING: missing spoiler article {index} in batch")
+            for raw in pieces:
+                raw.hide_set(True)
+                raw.hide_render = True
+                pivot = raw.get("crp_pivot")
+                if pivot is None:
+                    print(f"WARNING: spoiler article {index} missing CRP pivot")
+                    continue
+                preview = raw.copy()
+                preview.data = raw.data
+                preview.name = f"SPOILER_COMPARE_{index:03d}_{'DOWN' if index == 52 else 'UP'}"
+                collection.objects.link(preview)
+                preview.parent = root
+                preview.matrix_parent_inverse.identity()
+                preview.location = (float(pivot[0]), float(pivot[2]) - 2.66, float(pivot[1]))
+                preview.rotation_euler = (math.pi / 2, 0.0, 0.0)
+                preview.scale = (1.0, 1.0, 1.0)
+                preview["comparison_status"] = "provisional -2.66 Y offset from lid alignment; no animation"
+                preview.hide_set(index != 52)
+                preview.hide_render = index != 52
+        print("SPOILER COMPARE: Down (52) visible, Up (53) hidden.")
+        print("Toggle both objects' viewport AND render visibility to compare states.")
+        print("Both use the provisional rear-lid longitudinal offset -2.66m.")
 
     if rear_hinge:
         # Hinge moved to the rear-window edge in the 2026-10-24 Blender test.
