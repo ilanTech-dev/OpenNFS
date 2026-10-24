@@ -417,12 +417,24 @@ def main():
                 collection.objects.link(copy)
                 copy.parent = root
                 copy.matrix_parent_inverse.identity()
-                copy.location = (pivot[0], pivot[2] - 2.66, pivot[1]) if rear_preset else (pivot[0], pivot[2], pivot[1])
+                if rear_preset == "carrera" and selected == 52:
+                    # User-verified visual alignment of lowered Carrera spoiler,
+                    # recovered after Blender crash on 2026-10-24.
+                    copy.location = (0.0, -1.39, 0.85)
+                elif rear_preset:
+                    copy.location = (pivot[0], pivot[2] - 2.66, pivot[1])
+                else:
+                    copy.location = (pivot[0], pivot[2], pivot[1])
                 copy.rotation_euler = (math.pi / 2, 0.0, 0.0)
                 copy.scale = (1.0, 1.0, 1.0)
                 copy["crp_variant_group"] = group_name
                 copy["crp_variant_article"] = selected
-                copy["pose_status"] = "provisional rear-deck -2.66 Y translation" if rear_preset else "uncalibrated; mapped translation and 90-degree X"
+                copy["pose_status"] = (
+                    "visually calibrated Carrera SpoilerDown at (0,-1.39,0.85), 90deg X"
+                    if rear_preset == "carrera" and selected == 52
+                    else "provisional rear-deck -2.66 Y translation" if rear_preset
+                    else "uncalibrated; mapped translation and 90-degree X"
+                )
                 copy.hide_set(False)
                 copy.hide_render = False
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
