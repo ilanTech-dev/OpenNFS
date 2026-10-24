@@ -406,12 +406,14 @@ def main():
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
 
     if rear_hinge:
-        # Recorded from the user's Blender alignment session (2026-10-15).
-        # The panel fits approximately, but the final closed seam is unverified.
+        # Hinge moved to the rear-window edge in the 2026-10-24 Blender test.
+        # This is a provisional hinge and closed seam still needs inspection.
+        # Reported opening rotation was 30 radians (1718.87 degrees), so
+        # never persist that angle as the default rest pose.
         # Keep the rest pose and opening motion distinct by parenting the
         # positioned mesh to the hinge, whose rotation remains zero.
-        hinge_position = (0.0, -2.07821, 0.74081)
-        local_lid_position = (0.0, 0.74857, 0.13803)
+        hinge_position = (0.0, -1.422851, 0.88027)
+        local_lid_position = (0.0, 0.093211, -0.00143)
         candidates = [obj for obj in collection.objects
                       if obj.get("crp_variant_group") == "lid"
                       and obj.get("crp_variant_article") == 39]
@@ -426,17 +428,17 @@ def main():
             hinge.empty_display_type = 'ARROWS'
             hinge.empty_display_size = 0.25
             hinge["hinge_axis"] = "Blender X"
-            hinge["hinge_status"] = "recorded experimental closed fit; seam not verified"
+            hinge["hinge_status"] = "rear-window edge pivot from 2026-10-24; closed seam not verified"
             hinge["rest_angle_degrees"] = 0.0
             candidate.parent = hinge
             candidate.matrix_parent_inverse.identity()
             candidate.location = local_lid_position
             candidate.rotation_euler = (math.pi / 2, 0.0, 0.0)
             candidate.scale = (1.0, 1.0, 1.0)
-            candidate["pose_status"] = "recorded experimental closed fit, 2026-10-15"
+            candidate["pose_status"] = "rear-window edge hinge; closed pose provisional, 2026-10-24"
             bpy.context.view_layer.update()
             print(f"REAR HINGE: restored {tuple(hinge.location)}")
-            print("Lid at 90 degrees local X; hinge at zero. Test hinge X +/-30 degrees.")
+            print("Lid at 90 degrees local X; hinge at zero. Test hinge X in DEGREES: +/-20 to 30.")
         print("REAR HINGE: reproducible provisional fit; original CRP data unchanged.")
 
     if underside_compare:
