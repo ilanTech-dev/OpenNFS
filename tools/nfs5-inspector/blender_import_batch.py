@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--animate-spoiler] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -38,6 +38,11 @@ def main():
     rear_preset = take_option("--rear-preset",
                               {"carrera": "carrera", "turbo-s": "turbo-s",
                                "clubsport": "clubsport"})
+    animate_spoiler = "--animate-spoiler" in args
+    if animate_spoiler:
+        args.remove("--animate-spoiler")
+    if animate_spoiler and rear_preset != "carrera":
+        raise SystemExit("--animate-spoiler requires --rear-preset carrera")
     spoiler_compare = "--spoiler-compare" in args
     if spoiler_compare:
         args.remove("--spoiler-compare")
@@ -438,6 +443,55 @@ def main():
                 copy.hide_set(False)
                 copy.hide_render = False
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
+
+    if animate_spoiler:
+        # A discrete visibility switch between fully modelled states, not
+        # a physical interpolation. Both objects share the visually checked
+        # Carrera spoiler-down transform (raised-state fit still provisional).
+        down = next((obj for obj in collection.objects
+                     if obj.get("crp_variant_group") == "spoiler"
+                     and obj.get("crp_variant_article") == 52), None)
+        sources = rear_variants.get(53, [])
+        if down is None or not sources:
+            print("WARNING: spoiler animation needs articles 52 and 53; skipped")
+        else:
+            up = sources[0].copy()
+            up.data = sources[0].data
+            up.name = "REAR_SPOILER_053_RAISED_ANIMATED"
+            collection.objects.link(up)
+            up.parent = root
+            up.matrix_parent_inverse.identity()
+            up.location = down.location.copy()
+            up.rotation_euler = down.rotation_euler.copy()
+            up.scale = down.scale.copy()
+            up["crp_variant_group"] = "spoiler"
+            up["crp_variant_article"] = 53
+            up["pose_status"] = "same as calibrated lowered spoiler; raised fit provisional"
+            up.hide_set(True)
+            up.hide_render = True
+            # Two keys on either side of each transition force a step,
+            # independent of the default F-curve interpolation in Blender.
+            for frame, raised in ((1, False), (20, False), (21, True),
+                                  (75, True), (76, False), (100, False)):
+                down.hide_viewport = raised
+                down.hide_render = raised
+                up.hide_viewport = not raised
+                up.hide_render = not raised
+                for obj in (down, up):
+                    obj.keyframe_insert(data_path="hide_viewport", frame=frame,
+                                        group="Carrera spoiler states")
+                    obj.keyframe_insert(data_path="hide_render", frame=frame,
+                                        group="Carrera spoiler states")
+            down.hide_viewport = False
+            down.hide_render = False
+            up.hide_viewport = True
+            up.hide_render = True
+            scene = bpy.context.scene
+            scene.frame_start = 1
+            scene.frame_end = 100
+            scene.frame_set(1)
+            print("CARRERA SPOILER: down frames 1-20, up 21-75, down 76-100.")
+            print("NOTE: visibility state swap, NOT smooth mechanism animation.")
 
     if spoiler_compare:
         # Both spoiler states share the level-1 CRP translation. Compare the
