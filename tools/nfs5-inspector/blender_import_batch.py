@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -35,6 +35,9 @@ def main():
         value = choices[args[index + 1]]
         del args[index:index + 2]
         return value
+    rear_preset = take_option("--rear-preset",
+                              {"carrera": "carrera", "turbo-s": "turbo-s",
+                               "clubsport": "clubsport"})
     spoiler_compare = "--spoiler-compare" in args
     if spoiler_compare:
         args.remove("--spoiler-compare")
@@ -54,6 +57,13 @@ def main():
     if rear_hinge:
         chosen_lid = 39
     chosen_spoiler = take_option("--spoiler", spoiler_choices)
+    if rear_preset is not None:
+        if chosen_lid is not None or chosen_spoiler is not None or spoiler_compare or rear_hinge:
+            raise SystemExit("--rear-preset cannot be combined with manual rear selection, spoiler compare or rear-lid hinge")
+        chosen_lid = {"carrera": 6, "turbo-s": 39, "clubsport": 4}[rear_preset]
+        chosen_spoiler = 52 if rear_preset == "carrera" else None
+        print(f"REAR PRESET: {rear_preset} (hypothetical model grouping; geometry fit unverified)")
+
     if spoiler_compare and chosen_spoiler is not None:
         raise SystemExit("Use --spoiler-compare without --spoiler; both states are included.")
     rear_lid_test = "--rear-lid-test" in args
@@ -381,6 +391,9 @@ def main():
     # Keep selection independent. This pose is an UNCALIBRATED reference
     # rotation, not a claim about the original game's default configuration.
     if chosen_lid is not None or chosen_spoiler is not None:
+        if rear_preset is not None:
+            root["rear_preset_hypothesis"] = rear_preset
+            print("REAR PRESET: source meshes unchanged; calibrated closed position not guaranteed.")
         for index in (4, 6, 39, 52, 53):
             for raw in rear_variants.get(index, []):
                 raw.hide_set(True)
@@ -404,12 +417,12 @@ def main():
                 collection.objects.link(copy)
                 copy.parent = root
                 copy.matrix_parent_inverse.identity()
-                copy.location = (pivot[0], pivot[2], pivot[1])
+                copy.location = (pivot[0], pivot[2] - 2.66, pivot[1]) if rear_preset else (pivot[0], pivot[2], pivot[1])
                 copy.rotation_euler = (math.pi / 2, 0.0, 0.0)
                 copy.scale = (1.0, 1.0, 1.0)
                 copy["crp_variant_group"] = group_name
                 copy["crp_variant_article"] = selected
-                copy["pose_status"] = "uncalibrated; mapped translation and 90-degree X"
+                copy["pose_status"] = "provisional rear-deck -2.66 Y translation" if rear_preset else "uncalibrated; mapped translation and 90-degree X"
                 copy.hide_set(False)
                 copy.hide_render = False
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
