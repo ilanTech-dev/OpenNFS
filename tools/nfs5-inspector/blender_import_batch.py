@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--lid-underside-compare] [--rear-lid-hinge] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--lid-type 0|1|2] [--spoiler down|up] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -35,7 +35,10 @@ def main():
         value = choices[args[index + 1]]
         del args[index:index + 2]
         return value
-    rear_hinge = "--rear-lid-hinge" in args
+    animate_rear_lid = "--animate-rear-lid" in args
+    if animate_rear_lid:
+        args.remove("--animate-rear-lid")
+    rear_hinge = "--rear-lid-hinge" in args or animate_rear_lid
     if rear_hinge:
         args.remove("--rear-lid-hinge")
     underside_compare = "--lid-underside-compare" in args
@@ -437,6 +440,20 @@ def main():
             candidate.scale = (1.0, 1.0, 1.0)
             candidate["pose_status"] = "rear-window edge hinge; closed pose provisional, 2026-10-24"
             bpy.context.view_layer.update()
+            if animate_rear_lid:
+                # Blender animation timeline: 1-20 closed, 45 open,
+                # 75 hold, 100 closed. -30 degrees visually validated.
+                for frame, angle in ((1, 0), (20, 0), (45, -30),
+                                     (75, -30), (100, 0)):
+                    hinge.rotation_euler.x = math.radians(angle)
+                    hinge.keyframe_insert(data_path="rotation_euler", index=0,
+                                          frame=frame, group="Rear engine lid")
+                hinge.rotation_euler.x = 0.0
+                scene = bpy.context.scene
+                scene.frame_start = 1
+                scene.frame_end = 100
+                scene.frame_set(1)
+                print("REAR HINGE ANIMATION: frames 1-20 closed, 45-75 open (-30 deg), 100 closed.")
             print(f"REAR HINGE: restored {tuple(hinge.location)}")
             print("Lid at 90 degrees local X; hinge at zero. Test hinge X in DEGREES: +/-20 to 30.")
         print("REAR HINGE: reproducible provisional fit; original CRP data unchanged.")
