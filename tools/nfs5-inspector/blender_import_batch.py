@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--animate-spoiler] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -38,8 +38,11 @@ def main():
     rear_preset = take_option("--rear-preset",
                               {"carrera": "carrera", "turbo-s": "turbo-s",
                                "clubsport": "clubsport"})
-    animate_spoiler = "--animate-spoiler" in args
-    if animate_spoiler:
+    smooth_spoiler = "--animate-spoiler-smooth" in args
+    if smooth_spoiler:
+        args.remove("--animate-spoiler-smooth")
+    animate_spoiler = "--animate-spoiler" in args or smooth_spoiler
+    if "--animate-spoiler" in args:
         args.remove("--animate-spoiler")
     if animate_spoiler and rear_preset != "carrera":
         raise SystemExit("--animate-spoiler requires --rear-preset carrera")
@@ -477,8 +480,17 @@ def main():
             up.hide_set(False)
             down.hide_viewport = False
             up.hide_viewport = False
-            for frame, raised in ((1, False), (20, False), (21, True),
-                                  (75, True), (76, False), (100, False)):
+            # A rigid lift is a visual approximation; the different meshes
+            # cannot be vertex-morphed without a topology correspondence.
+            # Hand off at frames 31 / 76, then move the complete raised mesh.
+            if smooth_spoiler:
+                drop = 0.10  # metres; experimental vertical lift
+                state_keys = ((1, False), (30, False), (31, True),
+                              (75, True), (76, False), (100, False))
+            else:
+                state_keys = ((1, False), (20, False), (21, True),
+                              (75, True), (76, False), (100, False))
+            for frame, raised in state_keys:
                 for obj, active, normal_scale in (
                     (down, not raised, down_scale),
                     (up, raised, up_scale),
@@ -489,6 +501,16 @@ def main():
                                         group="Carrera spoiler states")
                     obj.keyframe_insert(data_path="hide_render", frame=frame,
                                         group="Carrera spoiler states")
+            if smooth_spoiler:
+                base_z = down.location.z
+                for frame, z in ((1, base_z-drop), (30, base_z-drop),
+                                 (31, base_z-drop), (45, base_z),
+                                 (60, base_z), (75, base_z),
+                                 (76, base_z-drop), (100, base_z-drop)):
+                    up.location.z = z
+                    up.keyframe_insert(data_path="location", index=2, frame=frame,
+                                       group="Carrera spoiler lift")
+                up.location.z = base_z - drop
             for obj in (down, up):
                 if obj.animation_data and obj.animation_data.action:
                     action = obj.animation_data.action
@@ -505,7 +527,11 @@ def main():
             scene.frame_start = 1
             scene.frame_end = 100
             scene.frame_set(1)
-            print("CARRERA SPOILER: down frames 1-20, up 21-75, down 76-100.")
+            if smooth_spoiler:
+                print("CARRERA SPOILER EXPERIMENT: mesh handoff at 31; rigid +0.10m lift through frame 45.")
+                print("NOTE: closing handoff at 76 is still abrupt; this does not reproduce real mechanism.")
+            else:
+                print("CARRERA SPOILER: down frames 1-20, up 21-75, down 76-100.")
             print("NOTE: discrete scale-based visibility state swap; no mechanical interpolation.")
 
     if spoiler_compare:
