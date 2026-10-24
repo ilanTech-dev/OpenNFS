@@ -406,38 +406,38 @@ def main():
             print(f"REAR {group_name.upper()}: selected article {selected}, orientation/placement uncalibrated.")
 
     if rear_hinge:
-        # Article 39 is an *experimental* opening-lid candidate. Its closed
-        # pose has not been aligned to the body: this is a reversible rig.
-        # Hide any other lid preview and place article 39 with its level-1
-        # CRP mapped translation, as in --lid-type 1.
+        # Recorded from the user's Blender alignment session (2026-10-15).
+        # The panel fits approximately, but the final closed seam is unverified.
+        # Keep the rest pose and opening motion distinct by parenting the
+        # positioned mesh to the hinge, whose rotation remains zero.
+        hinge_position = (0.0, -2.07821, 0.74081)
+        local_lid_position = (0.0, 0.74857, 0.13803)
         candidates = [obj for obj in collection.objects
                       if obj.get("crp_variant_group") == "lid"
                       and obj.get("crp_variant_article") == 39]
         if not candidates:
             print("REAR HINGE: no article 39 preview available")
         for candidate in candidates:
-            bpy.context.view_layer.update()
-            bounds = [candidate.matrix_world @ Vector(c) for c in candidate.bound_box]
-            # Engine is at the rear; the windscreen-facing edge is minimum
-            # Blender Y in the current provisional vehicle orientation.
-            hinge_y = min(p.y for p in bounds)
-            hinge_z = (min(p.z for p in bounds) + max(p.z for p in bounds)) / 2
             hinge = bpy.data.objects.new("HINGE_993_RearLid39_PROVISIONAL", None)
             collection.objects.link(hinge)
             hinge.parent = root
-            hinge.location = (0.0, hinge_y, hinge_z)
+            hinge.location = hinge_position
+            hinge.rotation_euler = (0.0, 0.0, 0.0)
             hinge.empty_display_type = 'ARROWS'
             hinge.empty_display_size = 0.25
             hinge["hinge_axis"] = "Blender X"
-            hinge["hinge_status"] = "provisional front/min-Y panel edge; closed fit not calibrated"
+            hinge["hinge_status"] = "recorded experimental closed fit; seam not verified"
             hinge["rest_angle_degrees"] = 0.0
-            bpy.context.view_layer.update()
-            rest_world = candidate.matrix_world.copy()
             candidate.parent = hinge
-            candidate.matrix_world = rest_world
-            print(f"REAR HINGE: article 39 pivot at {tuple(round(v, 5) for v in hinge.location)}")
-            print("Rotate hinge around local X, try +/-30 degrees; inspect collisions.")
-        print("REAR HINGE: rest pose uncalibrated; original CRP articles unchanged.")
+            candidate.matrix_parent_inverse.identity()
+            candidate.location = local_lid_position
+            candidate.rotation_euler = (math.pi / 2, 0.0, 0.0)
+            candidate.scale = (1.0, 1.0, 1.0)
+            candidate["pose_status"] = "recorded experimental closed fit, 2026-10-15"
+            bpy.context.view_layer.update()
+            print(f"REAR HINGE: restored {tuple(hinge.location)}")
+            print("Lid at 90 degrees local X; hinge at zero. Test hinge X +/-30 degrees.")
+        print("REAR HINGE: reproducible provisional fit; original CRP data unchanged.")
 
     if underside_compare:
         # Show identical placement/orientation for the two potential standard lids.
