@@ -38,9 +38,10 @@ def main():
     animate_rear_lid = "--animate-rear-lid" in args
     if animate_rear_lid:
         args.remove("--animate-rear-lid")
-    rear_hinge = "--rear-lid-hinge" in args or animate_rear_lid
-    if rear_hinge:
+    requested_rear_hinge = "--rear-lid-hinge" in args
+    if requested_rear_hinge:
         args.remove("--rear-lid-hinge")
+    rear_hinge = requested_rear_hinge or animate_rear_lid
     underside_compare = "--lid-underside-compare" in args
     if underside_compare:
         args.remove("--lid-underside-compare")
