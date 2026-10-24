@@ -122,6 +122,19 @@ def main():
                     panels.setdefault(index, []).append(obj)
             imported += 1
 
+    # CRP WheelFront (46) and WheelRear (47) mesh widths are correct, but
+    # applying their raw Z translations as Blender Y put them on opposite
+    # axles relative to the correctly oriented body. Exchange ONLY Y axle
+    # positions; retain each article's original mesh, lateral X, and height Z.
+    if 46 in wheels and 47 in wheels:
+        front_y = wheels[46].location.y
+        rear_y = wheels[47].location.y
+        wheels[46].location.y = rear_y
+        wheels[47].location.y = front_y
+        print("WHEEL AXLES: front/rear longitudinal positions exchanged; meshes and lateral offsets retained.")
+    else:
+        print("WARNING: axle correction skipped: both articles 46 and 47 are required.")
+
     for index, label in ((46, "Front"), (47, "Rear")):
         source = wheels.get(index)
         if source is None:
@@ -460,8 +473,8 @@ def main():
         print("Candidate positions use provisional mapping, not calibrated showroom-open poses.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
-    print("Wheels: 46/47 at CRP translations, opposite sides mirrored (UNVERIFIED)")
-    print("Mesh coordinates unchanged; wheel translation Y/Z swapped.")
+    print("Wheels: 46=front, 47=rear; original meshes with exchanged longitudinal CRP positions; mirrored opposite sides (provisional)")
+    print("Mesh coordinates unchanged; wheel CRP Z mapped to Blender Y, then axle Y values exchanged.")
     print(f"Wheel longitudinal calibration: +{WHEEL_FORWARD_PREVIEW_OFFSET:.2f} Blender Y (provisional)")
     print("Hinge test empties created for door/bonnet/rear lid; rotate to experiment.")
     print(f"Panel display: {'enabled' if show_panels else 'hidden'} (use --panels to display).")
