@@ -467,31 +467,46 @@ def main():
             up["crp_variant_group"] = "spoiler"
             up["crp_variant_article"] = 53
             up["pose_status"] = "same as calibrated lowered spoiler; raised fit provisional"
-            up.hide_set(True)
-            up.hide_render = True
-            # Two keys on either side of each transition force a step,
-            # independent of the default F-curve interpolation in Blender.
+            # Do not keyframe hide_viewport: Blender can stop evaluating the
+            # disabled object's world transform. Instead switch visibility via
+            # scale keys (0 or original scale) and hide_render for renders.
+            # Constant interpolation ensures no scaling between states.
+            down_scale = down.scale.copy()
+            up_scale = up.scale.copy()
+            down.hide_set(False)
+            up.hide_set(False)
+            down.hide_viewport = False
+            up.hide_viewport = False
             for frame, raised in ((1, False), (20, False), (21, True),
                                   (75, True), (76, False), (100, False)):
-                down.hide_viewport = raised
-                down.hide_render = raised
-                up.hide_viewport = not raised
-                up.hide_render = not raised
-                for obj in (down, up):
-                    obj.keyframe_insert(data_path="hide_viewport", frame=frame,
+                for obj, active, normal_scale in (
+                    (down, not raised, down_scale),
+                    (up, raised, up_scale),
+                ):
+                    obj.scale = normal_scale if active else (0.0, 0.0, 0.0)
+                    obj.hide_render = not active
+                    obj.keyframe_insert(data_path="scale", frame=frame,
                                         group="Carrera spoiler states")
                     obj.keyframe_insert(data_path="hide_render", frame=frame,
                                         group="Carrera spoiler states")
-            down.hide_viewport = False
+            for obj in (down, up):
+                if obj.animation_data and obj.animation_data.action:
+                    action = obj.animation_data.action
+                    # Blender 4.x exposes action.fcurves; Blender 5.x may use
+                    # layered actions, but adjacent keys still give exact
+                    # on/off states at the prescribed integer frames.
+                    for curve in getattr(action, "fcurves", []):
+                        if curve.data_path == "scale":
+                            for point in curve.keyframe_points:
+                                point.interpolation = 'CONSTANT'
             down.hide_render = False
-            up.hide_viewport = True
             up.hide_render = True
             scene = bpy.context.scene
             scene.frame_start = 1
             scene.frame_end = 100
             scene.frame_set(1)
             print("CARRERA SPOILER: down frames 1-20, up 21-75, down 76-100.")
-            print("NOTE: visibility state swap, NOT smooth mechanism animation.")
+            print("NOTE: discrete scale-based visibility state swap; no mechanical interpolation.")
 
     if spoiler_compare:
         # Both spoiler states share the level-1 CRP translation. Compare the
