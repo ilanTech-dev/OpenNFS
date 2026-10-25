@@ -825,7 +825,8 @@ def main():
                     links.new(tex.outputs["Fac"], bump.inputs["Height"])
                     links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
             if glass:
-                if hasattr(mat, 'surface_render_method'):\n                    mat.surface_render_method = 'DITHERED'
+                if hasattr(mat, 'surface_render_method'):
+                    mat.surface_render_method = 'DITHERED'
             return mat
 
         materials = {
