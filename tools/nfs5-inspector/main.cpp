@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -952,6 +953,7 @@ void inspectSpoilerTopology(const Bytes& b) {
     if(dir>b.size()||n>(b.size()-dir)/16||n<=53)
         throw std::runtime_error("missing spoiler articles");
     struct Group {unsigned descriptor;std::vector<std::size_t> indices;};
+    struct Mesh {std::vector<Group> groups;std::vector<std::array<float,3>> positions;};
     auto collect=[&](std::size_t article) {
         const auto at=dir+article*16;
         const std::size_t rel=read32le(b,at+12),len=read32le(b,at+8);
@@ -959,12 +961,15 @@ void inspectSpoilerTopology(const Bytes& b) {
         const auto begin=at+rel*16;
         if(len>(b.size()-begin)/16)throw std::runtime_error("article length invalid");
         const auto end=begin+len*16;
-        std::size_t vertices=0;
+        std::size_t vertices=0,vertexStart=SIZE_MAX;
         for(std::size_t p=begin;p<end;p+=16) {
             const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
-            if(b[p+2]=='t'&&b[p+3]=='v'&&info==1)vertices=read32le(b,p+8);
+            if(b[p+2]=='t'&&b[p+3]=='v'&&info==1){vertices=read32le(b,p+8);vertexStart=p+read32le(b,p+12);}
         }
-        std::vector<Group> groups;
+        if(vertexStart==SIZE_MAX||vertices>100000||vertexStart>b.size()||vertices>(b.size()-vertexStart)/16)throw std::runtime_error("bad spoiler vertices");
+        Mesh mesh;
+        for(std::size_t i=0;i<vertices;++i){std::array<float,3> pos{};for(int k=0;k<3;++k){const auto bits=read32le(b,vertexStart+i*16+4*k);std::memcpy(&pos[k],&bits,4);}mesh.positions.push_back(pos);}
+        auto& groups=mesh.groups;
         for(std::size_t p=begin;p<end;p+=16) {
             if(b[p+2]!='r'||b[p+3]!='p')continue;
             const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
@@ -1000,12 +1005,12 @@ void inspectSpoilerTopology(const Bytes& b) {
             groups.push_back(std::move(g));
         }
         std::cout<<"Article "<<article<<": vertices="<<vertices<<" groups="<<groups.size()<<"\n";
-        return groups;
+        return mesh;
     };
     const auto down=collect(52),up=collect(53);
-    for(const auto& d:down) {
-        const auto it=std::find_if(up.begin(),up.end(),[&](const Group& g){return g.descriptor==d.descriptor;});
-        if(it==up.end()){std::cout<<"  group 0x"<<std::hex<<d.descriptor<<std::dec<<" absent in raised state\n";continue;}
+    for(const auto& d:down.groups) {
+        const auto it=std::find_if(up.groups.begin(),up.groups.end(),[&](const Group& g){return g.descriptor==d.descriptor;});
+        if(it==up.groups.end()){std::cout<<"  group 0x"<<std::hex<<d.descriptor<<std::dec<<" absent in raised state\n";continue;}
         const auto& u=*it;
         std::map<std::size_t,std::size_t> dm,um;
         for(auto idx:d.indices)if(!dm.count(idx))dm[idx]=dm.size();
@@ -1013,10 +1018,41 @@ void inspectSpoilerTopology(const Bytes& b) {
         std::size_t same=0;
         const auto size=std::min(d.indices.size(),u.indices.size());
         for(std::size_t k=0;k<size;++k)if(d.indices[k]==u.indices[k])++same;
+        // Compare triangle centroids in raw CRP coordinates. Greedy unique
+        // nearest-centroid pairing is a heuristic, not a topology proof.
+        auto centroid=[](const Mesh& mesh,const Group& g,std::size_t tri){
+            std::array<double,3> c{};
+            for(int j=0;j<3;++j){const auto& p=mesh.positions[g.indices[tri*3+j]];
+                for(int k=0;k<3;++k)c[k]+=p[k]/3.0;}
+            return c;
+        };
+        const std::size_t ntri=d.indices.size()/3;
+        std::vector<bool> used(u.indices.size()/3,false);
+        double total=0,maxDistance=0;
+        std::size_t orderMatches=0;
+        for(std::size_t i=0;i<ntri;++i){
+            const auto a=centroid(down,d,i);
+            double best=INFINITY;std::size_t bestj=SIZE_MAX;
+            for(std::size_t j=0;j<used.size();++j){
+                if(used[j])continue;
+                const auto b=centroid(up,u,j);
+                double distance=0;
+                for(int k=0;k<3;++k)distance+=(a[k]-b[k])*(a[k]-b[k]);
+                if(distance<best){best=distance;bestj=j;}
+            }
+            if(bestj==SIZE_MAX)break;
+            used[bestj]=true;
+            if(i==bestj)++orderMatches;
+            const double dist=std::sqrt(best);
+            total+=dist;maxDistance=std::max(maxDistance,dist);
+        }
         std::cout<<"  group 0x"<<std::hex<<d.descriptor<<std::dec
                  <<" triangles="<<d.indices.size()/3<<"/"<<u.indices.size()/3
                  <<" unique_vertices="<<dm.size()<<"/"<<um.size()
                  <<" matching_raw_indices="<<same<<"/"<<size
+                 <<" nearest_centroid_mean="<<(ntri?total/ntri:0)
+                 <<" nearest_centroid_max="<<maxDistance
+                 <<" same_triangle_order="<<orderMatches<<"/"<<ntri
                  <<"\n";
     }
     std::cout<<"NOTE: equal triangle counts do not establish vertex correspondence or morph compatibility.\n";
