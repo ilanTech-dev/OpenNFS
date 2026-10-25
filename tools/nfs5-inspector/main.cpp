@@ -1032,6 +1032,68 @@ void inspectWheelStreamSamples(const Bytes& b) {
     std::cout<<"NOTE: float2 ranges alone do not establish UV semantics or indexing.\\n";
 }
 
+
+void inspectWheelIndexStreams(const Bytes& b) {
+    const auto dir=std::size_t(read32le(b,12))*16,n=std::size_t(read32le(b,4)>>5);
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("invalid article directory");
+    for(const std::size_t article: {std::size_t(46),std::size_t(47)}) {
+        if(article>=n)continue;
+        const auto at=dir+article*16,rel=std::size_t(read32le(b,at+12)),len=std::size_t(read32le(b,at+8));
+        if(rel>(b.size()-at)/16)throw std::runtime_error("invalid article offset");
+        const auto begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("invalid article size");
+        std::size_t countPositions=0,countUvs=0;
+        for(std::size_t i=0;i<len;++i){
+            const auto p=begin+i*16;
+            const auto tag=std::string{char(b[p+2]),char(b[p+3])};
+            const auto level=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if(level!=1)continue;
+            if(tag=="tv")countPositions=read32le(b,p+8);
+            if(tag=="vu")countUvs=read32le(b,p+8);
+        }
+        std::cout<<"Article "<<article<<" "<<articleName(b,article)
+                 <<" positions="<<countPositions<<" uvPairs="<<countUvs<<"\n";
+        for(std::size_t i=0;i<len;++i){
+            const auto p=begin+i*16;
+            if(b[p+2]!='r'||b[p+3]!='p')continue;
+            const unsigned descriptor=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if((descriptor>>12)!=1)continue;
+            const auto bytes=std::size_t(read32le(b,p+4)>>8);
+            const auto off=std::size_t(read32le(b,p+12));
+            const auto entries=std::size_t(read32le(b,p+8));
+            if(off>b.size()-p||bytes>b.size()-p-off||bytes<48)continue;
+            const auto base=p+off,infos=std::size_t(read32le(b,base+40)),streams=std::size_t(read32le(b,base+44));
+            if(infos>(bytes-48)/16||streams>(bytes-48-infos*16)/8)continue;
+            const auto dataStart=48+infos*16+streams*8;
+            if(dataStart>bytes)continue;
+            std::cout<<"  polygon 0x"<<std::hex<<descriptor<<std::dec<<" entries="<<entries<<"\n";
+            for(std::size_t k=0;k<streams;++k){
+                const auto q=base+48+infos*16+k*8;
+                const auto id=unsigned(b[q+2])|(unsigned(b[q+3])<<8);
+                const auto offset=std::size_t(read32le(b,q+4));
+                std::cout<<"    stream 0x"<<std::hex<<id<<std::dec<<" offset="<<offset;
+                if(offset>bytes-dataStart||entries>bytes-dataStart-offset){
+                    std::cout<<" INVALID RANGE\\n";continue;
+                }
+                unsigned lo=255,hi=0;
+                for(std::size_t j=0;j<entries;++j){
+                    const auto val=unsigned(b[base+dataStart+offset+j]);
+                    lo=std::min(lo,val);hi=std::max(hi,val);
+                }
+                std::cout<<" indexRange="<<lo<<".."<<hi
+                         <<" fitsPositions="<<(hi<countPositions?"yes":"no")
+                         <<" fitsUVs="<<(hi<countUvs?"yes":"no")<<"\n";
+                for(std::size_t j=0;j<std::min<std::size_t>(entries/3,5);++j) {
+                    const auto data=base+dataStart+offset+j*3;
+                    std::cout<<"      triangle["<<j<<"]="
+                             <<unsigned(b[data])<<","<<unsigned(b[data+1])<<","<<unsigned(b[data+2])<<"\n";
+                }
+            }
+        }
+    }
+    std::cout<<"NOTE: raw index values may be local to referenced buffers; range fit is not proof of semantics.\\n";
+}
+
 void inspectComponentMetadata(const Bytes& b) {
     const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
@@ -1687,8 +1749,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1715,6 +1777,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--attribute-layout") inspectAttributeLayout(output);
         if (argc == 3 && std::string(argv[2]) == "--wheel-reference-map") inspectWheelReferences(output);
         if (argc == 3 && std::string(argv[2]) == "--wheel-stream-samples") inspectWheelStreamSamples(output);
+        if (argc == 3 && std::string(argv[2]) == "--wheel-index-streams") inspectWheelIndexStreams(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
         if (argc == 3 && std::string(argv[2]) == "--spoiler-mesh-groups") inspectRearMeshGroups(output, true);
