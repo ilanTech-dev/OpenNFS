@@ -905,6 +905,60 @@ void inspectAttributeLayout(const Bytes& b) {
     std::cout<<"NOTE: raw attribute samples are not proven UV or material data.\\n";
 }
 
+
+void inspectWheelReferences(const Bytes& b) {
+    const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("invalid directory");
+    for(const std::size_t article: {std::size_t(46),std::size_t(47)}) {
+        if(article>=n)continue;
+        const auto at=dir+article*16;
+        const auto rel=std::size_t(read32le(b,at+12)),len=std::size_t(read32le(b,at+8));
+        if(rel>(b.size()-at)/16)throw std::runtime_error("invalid article offset");
+        const auto begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("invalid article length");
+        std::cout<<"Article "<<article<<" "<<articleName(b,article)
+                 <<" descriptors="<<len<<"\n";
+        for(std::size_t i=0;i<len;++i) {
+            const auto p=begin+i*16;
+            const auto bytes=std::size_t(read32le(b,p+4)>>8),offset=std::size_t(read32le(b,p+12));
+            const bool valid=offset<=b.size()-p&&bytes<=b.size()-p-offset;
+            std::cout<<"  part["<<i<<"] tag="<<char(b[p+2])<<char(b[p+3])
+                     <<" info=0x"<<std::hex<<(unsigned(b[p])|(unsigned(b[p+1])<<8))<<std::dec
+                     <<" payload="<<bytes<<" count="<<read32le(b,p+8)
+                     <<" valid="<<(valid?"yes":"NO")<<"\n";
+        }
+        for(std::size_t i=0;i<len;++i) {
+            const auto p=begin+i*16;
+            if(b[p+2]!='r'||b[p+3]!='p')continue;
+            const unsigned descriptor=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if((descriptor>>12)!=1)continue;
+            const auto size=std::size_t(read32le(b,p+4)>>8),offset=std::size_t(read32le(b,p+12));
+            if(offset>b.size()-p||size>b.size()-p-offset||size<48)continue;
+            const auto base=p+offset,info=std::size_t(read32le(b,base+40));
+            if(info>(size-48)/16)continue;
+            std::cout<<"  polygon 0x"<<std::hex<<descriptor<<std::dec<<" at part["<<i<<"]\\n";
+            for(std::size_t k=0;k<info;++k) {
+                const auto q=base+48+k*16;
+                const unsigned id=unsigned(b[q+10])|(unsigned(b[q+11])<<8);
+                if(id!=0&&id!=1&&id!=2&&id!=0x246e)continue;
+                const auto rm=std::size_t(read32le(b,q));
+                const auto length=std::size_t(unsigned(b[q+8])|(unsigned(b[q+9])<<8));
+                std::cout<<"    attr=0x"<<std::hex<<id<<std::dec
+                         <<" rm="<<rm<<" length="<<length;
+                for(const auto candidate: {rm,i+rm}) {
+                    std::cout<<" candidate["<<candidate<<"]=";
+                    if(candidate>=len){std::cout<<"outside";continue;}
+                    const auto cp=begin+candidate*16;
+                    std::cout<<char(b[cp+2])<<char(b[cp+3])
+                             <<"/"<<(read32le(b,cp+4)>>8)<<"B";
+                }
+                std::cout<<"\n";
+            }
+        }
+    }
+    std::cout<<"NOTE: candidate indices are hypotheses; no texture assignments inferred.\\n";
+}
+
 void inspectComponentMetadata(const Bytes& b) {
     const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
@@ -1560,8 +1614,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1586,6 +1640,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--surface-descriptors") inspectSurfaceDescriptors(output);
         if (argc == 3 && std::string(argv[2]) == "--triangle-attribute-samples") inspectTriangleAttributeSamples(output);
         if (argc == 3 && std::string(argv[2]) == "--attribute-layout") inspectAttributeLayout(output);
+        if (argc == 3 && std::string(argv[2]) == "--wheel-reference-map") inspectWheelReferences(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
         if (argc == 3 && std::string(argv[2]) == "--spoiler-mesh-groups") inspectRearMeshGroups(output, true);
