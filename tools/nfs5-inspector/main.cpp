@@ -705,15 +705,34 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
                 const auto rm=std::size_t(read32le(b,q));
                 const auto offset=std::size_t(read32le(b,q+4));
                 const auto length=std::size_t(unsigned(b[q+8])|(unsigned(b[q+9])<<8));
-                // rmOffset is an index into the article's 16-byte part table.
-                // Resolve the referenced part before interpreting its data.
-                if(rm>=len){std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec<<" invalid rmOffset\\n";break;}
+                // rmOffset locates the first n$ part. CRP can split the
+                // logical per-triangle stream across successive n$ payloads.
+                // Resolve a logical byte offset by walking compatible parts.
+                if(rm>=len){std::cout<<"  invalid part reference\\n";break;}
                 const auto rp=begin+rm*16;
-                const auto partBytes=std::size_t(read32le(b,rp+4)>>8);
-                const auto partOffset=std::size_t(read32le(b,rp+12));
-                if(partOffset>b.size()-rp||partBytes>b.size()-rp-partOffset||
-                   offset>partBytes||length>partBytes-offset) {
-                    std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec<<" unresolved source range\\n";break;
+                const char tag0=char(b[rp+2]),tag1=char(b[rp+3]);
+                std::vector<std::uint8_t> logical;
+                for(std::size_t part=rm;part<len;++part) {
+                    const auto desc=begin+part*16;
+                    if(char(b[desc+2])!=tag0||char(b[desc+3])!=tag1) {
+                        if(!logical.empty())break;
+                        continue;
+                    }
+                    const auto pb=std::size_t(read32le(b,desc+4)>>8);
+                    const auto po=std::size_t(read32le(b,desc+12));
+                    if(po>b.size()-desc||pb>b.size()-desc-po)break;
+                    const auto start=desc+po;
+                    logical.insert(logical.end(),b.begin()+start,b.begin()+start+pb);
+                    if(logical.size()>=offset&&length<=logical.size()-offset)break;
+                }
+                if(offset>logical.size()||length>logical.size()-offset) {
+                    std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec
+                             <<" unresolved source range; logicalBytes="<<logical.size()
+                             <<" offset="<<offset<<" bytes="<<length<<"\\n";
+                    break;
+                }
+                const auto data=logical.data()+offset;
+                std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec<<" unresolved source range\\n";break;
                 }
                 const auto data=rp+partOffset+offset;
                 std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec
@@ -726,7 +745,7 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
                     for(std::size_t j=0;j<16;++j)
                         std::cout<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(b[atData+j]);
                     std::cout<<std::dec<<std::setfill(' ')<<" uint32=";
-                    for(int j=0;j<4;++j)std::cout<<(j?",":"")<<read32le(b,atData+j*4);
+                    for(int j=0;j<4;++j)std::cout<<(j?",":"")<<(std::uint32_t(atData[j*4]) | (std::uint32_t(atData[j*4+1])<<8) | (std::uint32_t(atData[j*4+2])<<16) | (std::uint32_t(atData[j*4+3])<<24));
                     std::cout<<" float32=";
                     for(int j=0;j<4;++j){
                         const auto bits=read32le(b,atData+j*4);
