@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -46,6 +46,11 @@ def main():
         args.remove("--animate-spoiler")
     if animate_spoiler and rear_preset != "carrera":
         raise SystemExit("--animate-spoiler requires --rear-preset carrera")
+    spoiler_groups_preview = "--spoiler-groups-preview" in args
+    if spoiler_groups_preview:
+        args.remove("--spoiler-groups-preview")
+    if spoiler_groups_preview and (rear_preset != "carrera" or animate_spoiler):
+        raise SystemExit("--spoiler-groups-preview requires --rear-preset carrera without spoiler animation")
     spoiler_compare = "--spoiler-compare" in args
     if spoiler_compare:
         args.remove("--spoiler-compare")
@@ -533,6 +538,60 @@ def main():
             else:
                 print("CARRERA SPOILER: down frames 1-20, up 21-75, down 76-100.")
             print("NOTE: discrete scale-based visibility state swap; no mechanical interpolation.")
+
+    if spoiler_groups_preview:
+        # Diagnostic only: OBJ export emits polygons sequentially from the
+        # level-1 CRP descriptors 0x1000..0x1005. Isolate face runs, not
+        # arbitrary vertex-index ranges (the groups share vertices).
+        counts = (6, 4, 40, 6, 4, 40)
+        palette = ((0.92, 0.19, 0.15, 1), (0.96, 0.65, 0.12, 1),
+                   (0.18, 0.58, 0.98, 1), (0.63, 0.24, 0.83, 1),
+                   (0.17, 0.8, 0.43, 1), (0.96, 0.35, 0.66, 1))
+        for obj in collection.objects:
+            if obj.type == 'MESH':
+                obj.hide_set(True)
+                obj.hide_render = True
+        for article, lateral_offset, state in ((52, -1.1, "DOWN"),
+                                                (53, 1.1, "UP")):
+            sources = rear_variants.get(article, [])
+            if len(sources) != 1:
+                print(f"WARNING: expected one source mesh for spoiler {article}; got {len(sources)}")
+                continue
+            raw = sources[0]
+            faces = list(raw.data.polygons)
+            if len(faces) != sum(counts):
+                print(f"WARNING: spoiler {article} has {len(faces)} faces; expected {sum(counts)}. Group extraction skipped.")
+                continue
+            vertices = [tuple(v.co) for v in raw.data.vertices]
+            start = 0
+            for group, (count, rgba) in enumerate(zip(counts, palette), start=1):
+                polys = [tuple(face.vertices) for face in faces[start:start + count]]
+                start += count
+                name = f"SPOILER_{state}_{article:03d}_GROUP_{group}_0x{0x0fff+group:04X}"
+                mesh = bpy.data.meshes.new(name)
+                mesh.from_pydata(vertices, [], polys)
+                mesh.update()
+                part = bpy.data.objects.new(name, mesh)
+                collection.objects.link(part)
+                part.parent = root
+                part.matrix_parent_inverse.identity()
+                part.location = (lateral_offset, -1.39, 0.85)
+                part.rotation_euler = (math.pi / 2, 0.0, 0.0)
+                mat = bpy.data.materials.new(f"SPOILER_GROUP_{group}_COLOR")
+                mat.diffuse_color = rgba
+                mesh.materials.append(mat)
+                part["crp_variant_article"] = article
+                part["crp_polygon_descriptor"] = f"0x{0x0fff+group:04X}"
+                part["diagnostic"] = "level-1 OBJ face-run segmentation; lateral offset for visual comparison"
+                part.hide_set(False)
+                part.hide_render = False
+            print(f"SPOILER GROUPS {state}: 6 separate meshes, total {sum(counts)} triangles.")
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'VIEW_3D':
+                area.spaces.active.shading.color_type = 'MATERIAL'
+        print("SPOILER GROUP PREVIEW: DOWN on left (X=-1.1), UP on right (X=+1.1).")
+        print("Six consistent descriptor colours per state. All other meshes hidden.")
+        print("Diagnostic segmentation only; original source meshes unchanged.")
 
     if spoiler_compare:
         # Both spoiler states share the level-1 CRP translation. Compare the
