@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -38,6 +38,9 @@ def main():
     rear_preset = take_option("--rear-preset",
                               {"carrera": "carrera", "turbo-s": "turbo-s",
                                "clubsport": "clubsport"})
+    material_preview = "--material-preview" in args
+    if material_preview:
+        args.remove("--material-preview")
     mechanism_spoiler = "--animate-spoiler-mechanism" in args
     if mechanism_spoiler:
         args.remove("--animate-spoiler-mechanism")
@@ -788,6 +791,83 @@ def main():
         print("LID UNDERSIDE COMPARE: article 6 at X=-1.05, article 39 at X=+1.05.")
         print("All other meshes hidden. Orbit Blender view underneath to compare underside faces.")
         print("Candidate positions use provisional mapping, not calibrated showroom-open poses.")
+
+
+    if material_preview:
+        # Readable procedural showroom colours, NOT decoded NFS5 textures.
+        # Work on imported data only, never alter local source OBJs.
+        def showroom_material(name, rgba, metallic=0.0, roughness=0.4,
+                              glass=False, rubber=False):
+            mat = bpy.data.materials.get("PREVIEW_993_" + name)
+            if mat is None:
+                mat = bpy.data.materials.new("PREVIEW_993_" + name)
+            mat.diffuse_color = rgba
+            mat.use_nodes = True
+            nodes = mat.node_tree.nodes
+            bsdf = next((n for n in nodes if n.type == 'BSDF_PRINCIPLED'), None)
+            if bsdf:
+                bsdf.inputs["Base Color"].default_value = rgba
+                bsdf.inputs["Metallic"].default_value = metallic
+                bsdf.inputs["Roughness"].default_value = roughness
+                if glass:
+                    bsdf.inputs["Transmission Weight"].default_value = 0.22
+                    bsdf.inputs["Alpha"].default_value = 0.55
+                if rubber:
+                    # Generated coordinates; no UV map required.
+                    tex = nodes.get("Rubber grain") or nodes.new('ShaderNodeTexNoise')
+                    tex.name = "Rubber grain"
+                    tex.inputs["Scale"].default_value = 170.0
+                    bump = nodes.get("Rubber microtexture") or nodes.new('ShaderNodeBump')
+                    bump.name = "Rubber microtexture"
+                    bump.inputs["Strength"].default_value = 0.10
+                    bump.inputs["Distance"].default_value = 0.008
+                    links = mat.node_tree.links
+                    links.new(tex.outputs["Fac"], bump.inputs["Height"])
+                    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+            if glass:
+                if hasattr(mat, 'surface_render_method'):\n                    mat.surface_render_method = 'DITHERED'
+            return mat
+
+        materials = {
+            "paint": showroom_material("Guards_Red_paint", (0.63, 0.018, 0.012, 1), 0.40, 0.23),
+            "glass": showroom_material("smoked_glass", (0.045, 0.09, 0.12, 1), 0.05, 0.12, glass=True),
+            "rubber": showroom_material("rubber", (0.025, 0.027, 0.030, 1), 0.0, 0.83, rubber=True),
+            "trim": showroom_material("black_trim", (0.035, 0.038, 0.044, 1), 0.04, 0.42),
+            "silver": showroom_material("alloy", (0.46, 0.49, 0.51, 1), 0.83, 0.27),
+            "light": showroom_material("headlight_glass", (0.68, 0.74, 0.79, 1), 0.1, 0.17),
+        }
+        def category(obj):
+            n = (obj.get("crp_name") or obj.name).lower()
+            article = obj.get("crp_article")
+            if article in (46, 47) or "wheel" in n or "tire" in n or "tyre" in n:
+                return "rubber"
+            if any(word in n for word in ("glass", "window", "windscreen", "windshield")):
+                return "glass"
+            if any(word in n for word in ("headlight", "headlamp", "taillight", "tail_light", "brakelight", "lightglass")):
+                return "light"
+            if any(word in n for word in ("mirror", "grille", "grill", "rubber", "trim", "wiper", "spoiler")):
+                return "trim"
+            if any(word in n for word in ("rim", "alloy", "brake", "exhaust")):
+                return "silver"
+            return "paint"
+
+        assigned = {}
+        for obj in collection.objects:
+            if obj.type != 'MESH':
+                continue
+            kind = category(obj)
+            # Shared mesh datablocks are intentionally assigned one material;
+            # this is a coarse whole-object preview, not face-level texturing.
+            obj.data.materials.clear()
+            obj.data.materials.append(materials[kind])
+            obj.color = materials[kind].diffuse_color
+            assigned[kind] = assigned.get(kind, 0) + 1
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'VIEW_3D':
+                area.spaces.active.shading.type = 'MATERIAL'
+        print("MATERIAL PREVIEW: procedural showroom colours, NOT original NFS5 textures.")
+        print("MATERIAL PREVIEW categories:", assigned)
+        print("NOTE: wheels are whole-mesh rubber; original texture/UV decoding remains future work.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46=front, 47=rear; original meshes with exchanged longitudinal CRP positions; mirrored opposite sides (provisional)")
