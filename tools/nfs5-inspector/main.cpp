@@ -946,6 +946,82 @@ void inspectRearMeshGroups(const Bytes& b, bool spoiler=false) {
     }
 }
 
+
+void inspectSpoilerTopology(const Bytes& b) {
+    const std::size_t n=read32le(b,4)>>5,dir=std::size_t(read32le(b,12))*16;
+    if(dir>b.size()||n>(b.size()-dir)/16||n<=53)
+        throw std::runtime_error("missing spoiler articles");
+    struct Group {unsigned descriptor;std::vector<std::size_t> indices;};
+    auto collect=[&](std::size_t article) {
+        const auto at=dir+article*16;
+        const std::size_t rel=read32le(b,at+12),len=read32le(b,at+8);
+        if(rel>(b.size()-at)/16)throw std::runtime_error("article offset invalid");
+        const auto begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("article length invalid");
+        const auto end=begin+len*16;
+        std::size_t vertices=0;
+        for(std::size_t p=begin;p<end;p+=16) {
+            const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if(b[p+2]=='t'&&b[p+3]=='v'&&info==1)vertices=read32le(b,p+8);
+        }
+        std::vector<Group> groups;
+        for(std::size_t p=begin;p<end;p+=16) {
+            if(b[p+2]!='r'||b[p+3]!='p')continue;
+            const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if((info>>12)!=1)continue;
+            const std::size_t bytes=read32le(b,p+4)>>8,count=read32le(b,p+8),relp=read32le(b,p+12);
+            if(relp>b.size()-p||bytes>b.size()-p-relp||bytes<48||count%3)
+                throw std::runtime_error("spoiler polygon descriptor invalid");
+            const auto base=p+relp;
+            const auto infos=read32le(b,base+40),streams=read32le(b,base+44);
+            if(infos>(bytes-48)/16||streams>(bytes-48-infos*16)/8||!streams)
+                throw std::runtime_error("spoiler polygon layout invalid");
+            const auto data=48+infos*16+streams*8;
+            std::size_t offset=SIZE_MAX,adjust=SIZE_MAX;
+            for(std::size_t k=0;k<streams;++k){
+                const auto q=base+48+infos*16+k*8;
+                const unsigned id=unsigned(b[q+2])|(unsigned(b[q+3])<<8);
+                if(id==0x4976)offset=read32le(b,q+4);
+            }
+            for(std::size_t k=0;k<infos;++k){
+                const auto q=base+48+k*16;
+                const unsigned id=unsigned(b[q+10])|(unsigned(b[q+11])<<8);
+                const unsigned level=unsigned(b[q+12])|(unsigned(b[q+13])<<8);
+                if(id==0&&level==1&&read32le(b,q+4)%16==0)adjust=read32le(b,q+4)/16;
+            }
+            if(offset==SIZE_MAX||adjust==SIZE_MAX||offset>bytes-data||count>bytes-data-offset)
+                throw std::runtime_error("spoiler polygon index stream invalid");
+            Group g{info,{}};
+            for(std::size_t k=0;k<count;++k){
+                const auto idx=std::size_t(b[base+data+offset+k])+adjust;
+                if(idx>=vertices)throw std::runtime_error("spoiler vertex index out of range");
+                g.indices.push_back(idx);
+            }
+            groups.push_back(std::move(g));
+        }
+        std::cout<<"Article "<<article<<": vertices="<<vertices<<" groups="<<groups.size()<<"\n";
+        return groups;
+    };
+    const auto down=collect(52),up=collect(53);
+    for(const auto& d:down) {
+        const auto it=std::find_if(up.begin(),up.end(),[&](const Group& g){return g.descriptor==d.descriptor;});
+        if(it==up.end()){std::cout<<"  group 0x"<<std::hex<<d.descriptor<<std::dec<<" absent in raised state\n";continue;}
+        const auto& u=*it;
+        std::map<std::size_t,std::size_t> dm,um;
+        for(auto idx:d.indices)if(!dm.count(idx))dm[idx]=dm.size();
+        for(auto idx:u.indices)if(!um.count(idx))um[idx]=um.size();
+        std::size_t same=0;
+        const auto size=std::min(d.indices.size(),u.indices.size());
+        for(std::size_t k=0;k<size;++k)if(d.indices[k]==u.indices[k])++same;
+        std::cout<<"  group 0x"<<std::hex<<d.descriptor<<std::dec
+                 <<" triangles="<<d.indices.size()/3<<"/"<<u.indices.size()/3
+                 <<" unique_vertices="<<dm.size()<<"/"<<um.size()
+                 <<" matching_raw_indices="<<same<<"/"<<size
+                 <<"\n";
+    }
+    std::cout<<"NOTE: equal triangle counts do not establish vertex correspondence or morph compatibility.\n";
+}
+
 void inspectPanelAnimationRecords(const Bytes& b) {
     const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
@@ -1158,8 +1234,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1184,6 +1260,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
         if (argc == 3 && std::string(argv[2]) == "--spoiler-mesh-groups") inspectRearMeshGroups(output, true);
+        if (argc == 3 && std::string(argv[2]) == "--spoiler-topology") inspectSpoilerTopology(output);
         if (argc == 3 && std::string(argv[2]) == "--panel-animation-records") inspectPanelAnimationRecords(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
