@@ -755,9 +755,6 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
                     break;
                 }
                 const auto data=logical.data()+offset;
-                std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec<<" unresolved source range\\n";break;
-                }
-                const auto data=rp+partOffset+offset;
                 std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec
                          <<" sourceTag="<<char(b[rp+2])<<char(b[rp+3])
                          <<" rmOffset="<<rm<<" bytes="<<length
@@ -771,7 +768,7 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
                     for(int j=0;j<4;++j)std::cout<<(j?",":"")<<(std::uint32_t(atData[j*4]) | (std::uint32_t(atData[j*4+1])<<8) | (std::uint32_t(atData[j*4+2])<<16) | (std::uint32_t(atData[j*4+3])<<24));
                     std::cout<<" float32=";
                     for(int j=0;j<4;++j){
-                        const auto bits=read32le(b,atData+j*4);
+                        const auto bits=std::uint32_t(atData[j*4]) | (std::uint32_t(atData[j*4+1])<<8) | (std::uint32_t(atData[j*4+2])<<16) | (std::uint32_t(atData[j*4+3])<<24);
                         float v;std::memcpy(&v,&bits,4);
                         if(std::isfinite(v))std::cout<<(j?",":"")<<v;
                         else std::cout<<(j?",":"")<<"nonfinite";
