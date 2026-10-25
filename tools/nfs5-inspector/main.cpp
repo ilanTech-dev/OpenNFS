@@ -763,7 +763,7 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
                     const auto atData=data+rec*16;
                     std::cout<<"    record "<<rec<<" hex=";
                     for(std::size_t j=0;j<16;++j)
-                        std::cout<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(b[atData+j]);
+                        std::cout<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(atData[j]);
                     std::cout<<std::dec<<std::setfill(' ')<<" uint32=";
                     for(int j=0;j<4;++j)std::cout<<(j?",":"")<<(std::uint32_t(atData[j*4]) | (std::uint32_t(atData[j*4+1])<<8) | (std::uint32_t(atData[j*4+2])<<16) | (std::uint32_t(atData[j*4+3])<<24));
                     std::cout<<" float32=";
