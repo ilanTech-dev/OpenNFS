@@ -689,6 +689,29 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
         const auto begin=at+rel*16;
         if(len>(b.size()-begin)/16)throw std::runtime_error("article length invalid");
         std::cout<<"Article "<<article<<" "<<articleName(b,article)<<"\n";
+        // Select level-1 positions for an independent triangle-normal test.
+        std::size_t vertexStart=SIZE_MAX,vertexCount=0;
+        for(std::size_t p=begin;p<begin+len*16;p+=16) {
+            if(b[p+2]!='t'||b[p+3]!='v')continue;
+            const unsigned info=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            const auto bytes=std::size_t(read32le(b,p+4)>>8);
+            const auto count=std::size_t(read32le(b,p+8));
+            const auto relv=std::size_t(read32le(b,p+12));
+            if(info==1&&count&&count<=100000&&bytes==count*16&&
+               relv<=b.size()-p&&bytes<=b.size()-p-relv) {
+                vertexStart=p+relv;vertexCount=count;break;
+            }
+        }
+        auto pos=[&](std::size_t index) {
+            std::array<double,3> v{};
+            if(index>=vertexCount)throw std::runtime_error("bad vertex index");
+            for(int k=0;k<3;++k) {
+                const auto bits=read32le(b,vertexStart+index*16+4*k);
+                float x;std::memcpy(&x,&bits,4);v[k]=x;
+            }
+            return v;
+        };
+
         std::size_t sampledGroups=0;
         for(std::size_t p=begin;p<begin+len*16&&sampledGroups<3;p+=16) {
             if(b[p+2]!='r'||b[p+3]!='p')continue;
@@ -728,7 +751,7 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
                 if(offset>logical.size()||length>logical.size()-offset) {
                     std::cout<<"  group 0x"<<std::hex<<descriptor<<std::dec
                              <<" unresolved source range; logicalBytes="<<logical.size()
-                             <<" offset="<<offset<<" bytes="<<length<<"\\n";
+                             <<" offset="<<offset<<" bytes="<<length<<"\n";
                     break;
                 }
                 const auto data=logical.data()+offset;
@@ -754,6 +777,60 @@ void inspectTriangleAttributeSamples(const Bytes& b) {
                         else std::cout<<(j?",":"")<<"nonfinite";
                     }
                     std::cout<<"\n";
+                }
+                // Index stream 0x4976 identifies triangles. Calculate a
+                // geometric normal and compare its signed dot with 0x246e.
+                const auto streams=std::size_t(read32le(b,base+44));
+                if(vertexStart!=SIZE_MAX && info<=(bytes-48)/16 &&
+                   streams<=(bytes-48-info*16)/8 && streams) {
+                    const auto streamBase=48+info*16+streams*8;
+                    const auto count=std::size_t(read32le(b,p+8));
+                    std::size_t indexOffset=SIZE_MAX,adjust=SIZE_MAX;
+                    for(std::size_t i=0;i<streams;++i) {
+                        const auto d=base+48+info*16+i*8;
+                        const unsigned sid=unsigned(b[d+2])|(unsigned(b[d+3])<<8);
+                        if(sid==0x4976)indexOffset=read32le(b,d+4);
+                    }
+                    for(std::size_t i=0;i<info;++i) {
+                        const auto d=base+48+i*16;
+                        const unsigned aid=unsigned(b[d+10])|(unsigned(b[d+11])<<8);
+                        const unsigned level=unsigned(b[d+12])|(unsigned(b[d+13])<<8);
+                        const auto byteOffset=read32le(b,d+4);
+                        if(aid==0&&level==1&&byteOffset%16==0)
+                            adjust=byteOffset/16;
+                    }
+                    if(indexOffset!=SIZE_MAX&&adjust!=SIZE_MAX&&
+                       streamBase<=bytes&&indexOffset<=bytes-streamBase&&
+                       count<=bytes-streamBase-indexOffset) {
+                        const auto indexData=base+streamBase+indexOffset;
+                        for(std::size_t j=0;j<std::min<std::size_t>(4,std::min(count/3,length/16));++j) {
+                            const std::size_t i0=adjust+b[indexData+j*3],
+                                              i1=adjust+b[indexData+j*3+1],
+                                              i2=adjust+b[indexData+j*3+2];
+                            if(i0>=vertexCount||i1>=vertexCount||i2>=vertexCount)continue;
+                            const auto a=pos(i0),c=pos(i1),d=pos(i2);
+                            std::array<double,3> u{},v{},cross{};
+                            for(int k=0;k<3;++k){u[k]=c[k]-a[k];v[k]=d[k]-a[k];}
+                            cross={u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]};
+                            const double mag=std::sqrt(cross[0]*cross[0]+cross[1]*cross[1]+cross[2]*cross[2]);
+                            if(mag<1e-12)continue;
+                            std::array<float,4> stored{};
+                            for(int k=0;k<4;++k) {
+                                const auto ptr=data+j*16+4*k;
+                                const auto bits=std::uint32_t(ptr[0])|(std::uint32_t(ptr[1])<<8)|
+                                                (std::uint32_t(ptr[2])<<16)|(std::uint32_t(ptr[3])<<24);
+                                std::memcpy(&stored[k],&bits,4);
+                            }
+                            const double dot=(cross[0]*stored[0]+cross[1]*stored[1]+cross[2]*stored[2])/mag;
+                            const double planePlus=stored[0]*a[0]+stored[1]*a[1]+stored[2]*a[2]+stored[3];
+                            const double planeMinus=stored[0]*a[0]+stored[1]*a[1]+stored[2]*a[2]-stored[3];
+                            std::cout<<"    triangle "<<j<<" storedNormalLength="
+                                     <<std::sqrt(double(stored[0])*stored[0]+double(stored[1])*stored[1]+double(stored[2])*stored[2])
+                                     <<" normalDot="<<dot
+                                     <<" planeResidual(+w)="<<planePlus
+                                     <<" planeResidual(-w)="<<planeMinus<<"\n";
+                        }
+                    }
                 }
                 ++sampledGroups;
                 break;
