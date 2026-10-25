@@ -351,22 +351,6 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
         throw std::runtime_error("ambiguous vertex buffer; OBJ not written");
     }
     const auto selected=candidates.front();
-    std::size_t uvStart=SIZE_MAX,uvCount=0,normStart=SIZE_MAX,normCount=0;
-    if(uvMode){
-        for(std::size_t p=begin;p<end;p+=16){
-            const std::string tag{char(b[p+2]),char(b[p+3])};
-            const unsigned level=unsigned(b[p])|(unsigned(b[p+1])<<8);
-            if(level!=1||(tag!="vu"&&tag!="mn"))continue;
-            const auto size=std::size_t(read32le(b,p+4)>>8),count=std::size_t(read32le(b,p+8)),off=std::size_t(read32le(b,p+12));
-            const auto stride=(tag=="vu"?8u:16u);
-            if(!count||count>SIZE_MAX/stride||size!=count*stride||off>b.size()-p||size>b.size()-p-off)continue;
-            if(tag=="vu"){uvStart=p+off;uvCount=count;}
-            if(tag=="mn"){normStart=p+off;normCount=count;}
-        }
-        if(uvStart==SIZE_MAX||normStart==SIZE_MAX||normCount!=selected.count)
-            throw std::runtime_error("incompatible wheel UV/normal buffers");
-    }
-    std::vector<std::uint32_t> textureFaces;
     std::vector<std::uint32_t> faces;
     std::size_t used=0, skipped=0;
     for(std::size_t p=begin;p<end;p+=16) {
@@ -379,12 +363,11 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
         if(infos> (size-48)/16 || streams> (size-48-infos*16)/8) {++skipped;continue;}
         const std::size_t data=48+infos*16+streams*8;
         if(streams==0||count>(size-data)/streams){++skipped;continue;}
-        std::size_t vertexOff=SIZE_MAX,textureOff=SIZE_MAX;
+        std::size_t vertexOff=SIZE_MAX;
         for(std::size_t k=0;k<streams;++k) {
             const auto descriptor=base+48+infos*16+k*8;
             const unsigned id=unsigned(b[descriptor+2])|(unsigned(b[descriptor+3])<<8);
             if(id==0x4976)vertexOff=read32le(b,descriptor+4);
-            if(id==0x4975)textureOff=read32le(b,descriptor+4);
         }
         std::size_t adjust=SIZE_MAX;
         for(std::size_t k=0;k<infos;++k) {
@@ -396,28 +379,12 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
         }
         if(vertexOff==SIZE_MAX||adjust==SIZE_MAX||vertexOff>size-data||
            count>size-data-vertexOff){++skipped;continue;}
-        std::size_t uvAdjust=0;
-        if(uvMode){
-            bool found=false;
-            for(std::size_t k=0;k<infos;++k){
-                const auto row=base+48+k*16;
-                const unsigned id=unsigned(b[row+10])|(unsigned(b[row+11])<<8);
-                const unsigned level=unsigned(b[row+12])|(unsigned(b[row+13])<<8);
-                const auto offset=read32le(b,row+4);
-                if(id==2&&level==1&&offset%8==0){uvAdjust=offset/8;found=true;break;}
-            }
-            if(!found||textureOff==SIZE_MAX||textureOff>size-data||count>size-data-textureOff){++skipped;continue;}
-        }
         bool valid=true;
-        for(std::size_t k=0;k<count;++k){
+        for(std::size_t k=0;k<count;++k)
             if(std::size_t(b[base+data+vertexOff+k])+adjust>=selected.count)valid=false;
-            if(uvMode&&std::size_t(b[base+data+textureOff+k])+uvAdjust>=uvCount)valid=false;
-        }
         if(!valid){++skipped;continue;}
-        for(std::size_t k=0;k<count;++k){
+        for(std::size_t k=0;k<count;++k)
             faces.push_back(static_cast<std::uint32_t>(b[base+data+vertexOff+k]+adjust+1));
-            if(uvMode)textureFaces.push_back(static_cast<std::uint32_t>(b[base+data+textureOff+k]+uvAdjust+1));
-        }
         ++used;
     }
     if(faces.empty())throw std::runtime_error("no validated triangles; OBJ not written");
@@ -476,6 +443,22 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
         throw std::runtime_error("no unique matching vertex buffer; OBJ not written");
     }
     const auto selected=candidates.front();
+    std::size_t uvStart=SIZE_MAX,uvCount=0,normStart=SIZE_MAX,normCount=0;
+    if(uvMode){
+        for(std::size_t q=begin;q<end;q+=16){
+            const std::string tag{char(b[q+2]),char(b[q+3])};
+            const unsigned level=unsigned(b[q])|(unsigned(b[q+1])<<8);
+            if(level!=1||(tag!="vu"&&tag!="mn"))continue;
+            const auto bytes=std::size_t(read32le(b,q+4)>>8),count=std::size_t(read32le(b,q+8)),off=std::size_t(read32le(b,q+12));
+            const auto stride=(tag=="vu"?8u:16u);
+            if(!count||count>SIZE_MAX/stride||bytes!=count*stride||off>b.size()-q||bytes>b.size()-q-off)continue;
+            if(tag=="vu"){uvStart=q+off;uvCount=count;}
+            if(tag=="mn"){normStart=q+off;normCount=count;}
+        }
+        if(uvStart==SIZE_MAX||normStart==SIZE_MAX||normCount!=selected.count)
+            throw std::runtime_error("wheel UV/normal streams absent or inconsistent");
+    }
+    std::vector<std::uint32_t> textureFaces;
     std::vector<std::uint32_t> faces;
     std::size_t used=0, skipped=0;
     for(std::size_t p=begin;p<end;p+=16) {
@@ -488,11 +471,12 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
         if(infos> (size-48)/16 || streams> (size-48-infos*16)/8) {++skipped;continue;}
         const std::size_t data=48+infos*16+streams*8;
         if(streams==0||count>(size-data)/streams){++skipped;continue;}
-        std::size_t vertexOff=SIZE_MAX;
+        std::size_t vertexOff=SIZE_MAX,textureOff=SIZE_MAX;
         for(std::size_t k=0;k<streams;++k) {
             const auto descriptor=base+48+infos*16+k*8;
             const unsigned id=unsigned(b[descriptor+2])|(unsigned(b[descriptor+3])<<8);
             if(id==0x4976)vertexOff=read32le(b,descriptor+4);
+            if(id==0x4975)textureOff=read32le(b,descriptor+4);
         }
         std::size_t adjust=SIZE_MAX;
         for(std::size_t k=0;k<infos;++k) {
@@ -504,12 +488,28 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
         }
         if(vertexOff==SIZE_MAX||adjust==SIZE_MAX||vertexOff>size-data||
            count>size-data-vertexOff){++skipped;continue;}
+        std::size_t uvAdjust=0;
+        if(uvMode){
+            bool found=false;
+            for(std::size_t k=0;k<infos;++k){
+                const auto row=base+48+k*16;
+                const unsigned id=unsigned(b[row+10])|(unsigned(b[row+11])<<8);
+                const unsigned level=unsigned(b[row+12])|(unsigned(b[row+13])<<8);
+                const auto byteOffset=read32le(b,row+4);
+                if(id==2&&level==1&&byteOffset%8==0){uvAdjust=byteOffset/8;found=true;break;}
+            }
+            if(!found||textureOff==SIZE_MAX||textureOff>size-data||count>size-data-textureOff){++skipped;continue;}
+        }
         bool valid=true;
-        for(std::size_t k=0;k<count;++k)
+        for(std::size_t k=0;k<count;++k){
             if(std::size_t(b[base+data+vertexOff+k])+adjust>=selected.count)valid=false;
+            if(uvMode&&std::size_t(b[base+data+textureOff+k])+uvAdjust>=uvCount)valid=false;
+        }
         if(!valid){++skipped;continue;}
-        for(std::size_t k=0;k<count;++k)
+        for(std::size_t k=0;k<count;++k){
             faces.push_back(static_cast<std::uint32_t>(b[base+data+vertexOff+k]+adjust+1));
+            if(uvMode)textureFaces.push_back(static_cast<std::uint32_t>(b[base+data+textureOff+k]+uvAdjust+1));
+        }
         ++used;
     }
     if(faces.empty())throw std::runtime_error("no validated triangles; OBJ not written");
