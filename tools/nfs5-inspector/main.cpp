@@ -351,6 +351,22 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
         throw std::runtime_error("ambiguous vertex buffer; OBJ not written");
     }
     const auto selected=candidates.front();
+    std::size_t uvStart=SIZE_MAX,uvCount=0,normStart=SIZE_MAX,normCount=0;
+    if(uvMode){
+        for(std::size_t p=begin;p<end;p+=16){
+            const std::string tag{char(b[p+2]),char(b[p+3])};
+            const unsigned level=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if(level!=1||(tag!="vu"&&tag!="mn"))continue;
+            const auto size=std::size_t(read32le(b,p+4)>>8),count=std::size_t(read32le(b,p+8)),off=std::size_t(read32le(b,p+12));
+            const auto stride=(tag=="vu"?8u:16u);
+            if(!count||count>SIZE_MAX/stride||size!=count*stride||off>b.size()-p||size>b.size()-p-off)continue;
+            if(tag=="vu"){uvStart=p+off;uvCount=count;}
+            if(tag=="mn"){normStart=p+off;normCount=count;}
+        }
+        if(uvStart==SIZE_MAX||normStart==SIZE_MAX||normCount!=selected.count)
+            throw std::runtime_error("incompatible wheel UV/normal buffers");
+    }
+    std::vector<std::uint32_t> textureFaces;
     std::vector<std::uint32_t> faces;
     std::size_t used=0, skipped=0;
     for(std::size_t p=begin;p<end;p+=16) {
@@ -363,11 +379,12 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
         if(infos> (size-48)/16 || streams> (size-48-infos*16)/8) {++skipped;continue;}
         const std::size_t data=48+infos*16+streams*8;
         if(streams==0||count>(size-data)/streams){++skipped;continue;}
-        std::size_t vertexOff=SIZE_MAX;
+        std::size_t vertexOff=SIZE_MAX,textureOff=SIZE_MAX;
         for(std::size_t k=0;k<streams;++k) {
             const auto descriptor=base+48+infos*16+k*8;
             const unsigned id=unsigned(b[descriptor+2])|(unsigned(b[descriptor+3])<<8);
             if(id==0x4976)vertexOff=read32le(b,descriptor+4);
+            if(id==0x4975)textureOff=read32le(b,descriptor+4);
         }
         std::size_t adjust=SIZE_MAX;
         for(std::size_t k=0;k<infos;++k) {
@@ -379,12 +396,28 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
         }
         if(vertexOff==SIZE_MAX||adjust==SIZE_MAX||vertexOff>size-data||
            count>size-data-vertexOff){++skipped;continue;}
+        std::size_t uvAdjust=0;
+        if(uvMode){
+            bool found=false;
+            for(std::size_t k=0;k<infos;++k){
+                const auto row=base+48+k*16;
+                const unsigned id=unsigned(b[row+10])|(unsigned(b[row+11])<<8);
+                const unsigned level=unsigned(b[row+12])|(unsigned(b[row+13])<<8);
+                const auto offset=read32le(b,row+4);
+                if(id==2&&level==1&&offset%8==0){uvAdjust=offset/8;found=true;break;}
+            }
+            if(!found||textureOff==SIZE_MAX||textureOff>size-data||count>size-data-textureOff){++skipped;continue;}
+        }
         bool valid=true;
-        for(std::size_t k=0;k<count;++k)
+        for(std::size_t k=0;k<count;++k){
             if(std::size_t(b[base+data+vertexOff+k])+adjust>=selected.count)valid=false;
+            if(uvMode&&std::size_t(b[base+data+textureOff+k])+uvAdjust>=uvCount)valid=false;
+        }
         if(!valid){++skipped;continue;}
-        for(std::size_t k=0;k<count;++k)
+        for(std::size_t k=0;k<count;++k){
             faces.push_back(static_cast<std::uint32_t>(b[base+data+vertexOff+k]+adjust+1));
+            if(uvMode)textureFaces.push_back(static_cast<std::uint32_t>(b[base+data+textureOff+k]+uvAdjust+1));
+        }
         ++used;
     }
     if(faces.empty())throw std::runtime_error("no validated triangles; OBJ not written");
@@ -409,7 +442,8 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
              <<used<<" polygon descriptors; skipped "<<skipped<<" -> "<<dest<<"\n";
 }
 
-void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesystem::path& dest) {
+void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesystem::path& dest, bool uvMode=false) {
+    if(uvMode && article!=46 && article!=47)throw std::runtime_error("wheel UV export requires article 46 or 47");
     if (std::filesystem::exists(dest)) throw std::runtime_error("OBJ already exists");
     const std::size_t n = read32le(b,4)>>5, dir = std::size_t(read32le(b,12))*16;
     if (dir > b.size() || n > (b.size()-dir)/16 || article >= n)
@@ -491,9 +525,33 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
             throw std::runtime_error("non-finite vertex");
         out<<"v "<<x<<" "<<y<<" "<<z<<"\n";
     }
+    if(uvMode){
+        for(std::size_t i=0;i<uvCount;++i){
+            const auto at=uvStart+i*8;
+            const auto ub=read32le(b,at),vb=read32le(b,at+4);
+            float u,v;std::memcpy(&u,&ub,4);std::memcpy(&v,&vb,4);
+            if(!std::isfinite(u)||!std::isfinite(v))throw std::runtime_error("invalid UV float");
+            out<<"vt "<<u<<" "<<v<<"\n";
+        }
+        for(std::size_t i=0;i<normCount;++i){
+            const auto at=normStart+i*16;
+            float value[3];
+            for(int k=0;k<3;++k){
+                const auto bits=read32le(b,at+k*4);
+                std::memcpy(&value[k],&bits,4);
+                if(!std::isfinite(value[k]))throw std::runtime_error("invalid normal float");
+            }
+            out<<"vn "<<value[0]<<" "<<value[1]<<" "<<value[2]<<"\n";
+        }
+    }
     out<<"g Porsche993_article_"<<article<<"_level1\n";
-    for(std::size_t i=0;i<faces.size();i+=3)
-        out<<"f "<<faces[i]<<" "<<faces[i+1]<<" "<<faces[i+2]<<"\n";
+    for(std::size_t i=0;i<faces.size();i+=3){
+        if(uvMode){
+            out<<"f";
+            for(std::size_t k=0;k<3;++k)out<<" "<<faces[i+k]<<"/"<<textureFaces[i+k]<<"/"<<faces[i+k];
+            out<<"\n";
+        }else out<<"f "<<faces[i]<<" "<<faces[i+1]<<" "<<faces[i+2]<<"\n";
+    }
     out.close();
     if(!out)throw std::runtime_error("failed writing OBJ");
     std::cout<<"Article "<<article<<" mesh exported: "<<faces.size()/3<<" triangles from "
@@ -1749,8 +1807,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && std::string(argv[2]) == "--article-mesh") && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh")) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1785,12 +1843,12 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--panel-animation-records") inspectPanelAnimationRecords(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
-        if (argc == 5 && std::string(argv[2]) == "--article-mesh") {
+        if (argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh")) {
             const std::string value(argv[3]);
             std::size_t consumed = 0;
             const auto index = std::stoull(value, &consumed, 10);
             if (consumed != value.size()) throw std::runtime_error("invalid article index");
-            exportArticleMesh(output, static_cast<std::size_t>(index), std::filesystem::path(argv[4]));
+            exportArticleMesh(output, static_cast<std::size_t>(index), std::filesystem::path(argv[4]), std::string(argv[2])=="--wheel-uv-mesh");
         }
         if (argc == 4 && std::string(argv[2]) == "--polygons") {
             const std::string arg(argv[3]);
