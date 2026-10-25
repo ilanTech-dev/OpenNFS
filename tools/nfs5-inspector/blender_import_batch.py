@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -38,12 +38,17 @@ def main():
     rear_preset = take_option("--rear-preset",
                               {"carrera": "carrera", "turbo-s": "turbo-s",
                                "clubsport": "clubsport"})
+    mechanism_spoiler = "--animate-spoiler-mechanism" in args
+    if mechanism_spoiler:
+        args.remove("--animate-spoiler-mechanism")
     smooth_spoiler = "--animate-spoiler-smooth" in args
     if smooth_spoiler:
         args.remove("--animate-spoiler-smooth")
     animate_spoiler = "--animate-spoiler" in args or smooth_spoiler
     if "--animate-spoiler" in args:
         args.remove("--animate-spoiler")
+    if mechanism_spoiler and (animate_spoiler or rear_preset != "carrera"):
+        raise SystemExit("--animate-spoiler-mechanism requires --rear-preset carrera and no other spoiler animation")
     if animate_spoiler and rear_preset != "carrera":
         raise SystemExit("--animate-spoiler requires --rear-preset carrera")
     spoiler_groups_preview = "--spoiler-groups-preview" in args
@@ -538,6 +543,83 @@ def main():
             else:
                 print("CARRERA SPOILER: down frames 1-20, up 21-75, down 76-100.")
             print("NOTE: discrete scale-based visibility state swap; no mechanical interpolation.")
+
+    if mechanism_spoiler:
+        # Experimental reconstruction from the raised endpoint (article 53).
+        # 0x1000/1003 = presumed triangular supports (6 triangles per side).
+        # Remaining groups = moving panel. These assignments are provisional.
+        # No topology morph between articles 52 and 53 is attempted.
+        sources = rear_variants.get(53, [])
+        lowered = next((o for o in collection.objects
+                        if o.get("crp_variant_group") == "spoiler"
+                        and o.get("crp_variant_article") == 52), None)
+        if not sources or lowered is None:
+            print("WARNING: mechanism preview requires spoiler articles 52 and 53")
+        else:
+            raw = sources[0]
+            face_counts = (6, 4, 40, 6, 4, 40)
+            if len(raw.data.polygons) != sum(face_counts):
+                print("WARNING: article 53 polygon count differs from expected 100; mechanism skipped")
+            else:
+                # Don't disable viewport evaluation on animated pieces.
+                lowered.hide_set(True)
+                lowered.hide_render = True
+                faces = list(raw.data.polygons)
+                coords = [tuple(v.co) for v in raw.data.vertices]
+                face_groups = []
+                start = 0
+                for count in face_counts:
+                    face_groups.append([tuple(p.vertices) for p in faces[start:start + count]])
+                    start += count
+                travel = 0.10  # metres; placeholder, not measured from Porsche
+                yvals = [coords[i][1] for g in (0, 3) for face in face_groups[g] for i in face]
+                bottom, top = min(yvals), max(yvals)
+                for role, chosen in (("PANEL", (1, 2, 4, 5)), ("SUPPORT", (0, 3))):
+                    indices = sorted({i for g in chosen for face in face_groups[g] for i in face})
+                    remap = {old: j for j, old in enumerate(indices)}
+                    local_faces = [tuple(remap[i] for i in face)
+                                   for g in chosen for face in face_groups[g]]
+                    name = "SPOILER_MECHANISM_" + role
+                    mesh = bpy.data.meshes.new(name)
+                    mesh.from_pydata([coords[i] for i in indices], [], local_faces)
+                    mesh.update()
+                    obj = bpy.data.objects.new(name, mesh)
+                    collection.objects.link(obj)
+                    obj.parent = root
+                    obj.matrix_parent_inverse.identity()
+                    obj.location = lowered.location.copy()
+                    obj.rotation_euler = lowered.rotation_euler.copy()
+                    obj.scale = lowered.scale.copy()
+                    obj["mechanism_status"] = "experimental group split; travel and grouping provisional"
+                    obj.hide_set(False)
+                    obj.hide_render = False
+                    if role == "PANEL":
+                        base = obj.location.z
+                        for frame, z in ((1, base-travel), (20, base-travel),
+                                         (45, base), (75, base), (100, base-travel)):
+                            obj.location.z = z
+                            obj.keyframe_insert(data_path="location", index=2, frame=frame,
+                                                group="Carrera experimental panel lift")
+                    else:
+                        # With +90 deg X, CRP Y maps to Blender Z.
+                        # Vertices near the bottom remain anchored; vertices
+                        # toward the upper edge follow the moving panel.
+                        obj.shape_key_add(name="Extended", from_mix=False)
+                        key = obj.shape_key_add(name="Retracted", from_mix=False)
+                        span = max(top-bottom, 1e-6)
+                        for j, original in enumerate(indices):
+                            weight = max(0.0, min(1.0, (coords[original][1]-bottom)/span))
+                            key.data[j].co.y -= travel * weight
+                        for frame, influence in ((1, 1.0), (20, 1.0),
+                                                 (45, 0.0), (75, 0.0), (100, 1.0)):
+                            key.value = influence
+                            key.keyframe_insert(data_path="value", frame=frame,
+                                                group="Carrera experimental flexible support")
+                scene = bpy.context.scene
+                scene.frame_start, scene.frame_end = 1, 100
+                scene.frame_set(1)
+                print("SPOILER MECHANISM: panel lifts 10 cm; triangular supports deform, lower vertices anchored.")
+                print("EXPERIMENTAL: not guaranteed flush at frame 1; does not reconstruct actual 993 linkage.")
 
     if spoiler_groups_preview:
         # Diagnostic only: OBJ export emits polygons sequentially from the
