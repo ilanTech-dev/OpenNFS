@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -38,6 +38,14 @@ def main():
     rear_preset = take_option("--rear-preset",
                               {"carrera": "carrera", "turbo-s": "turbo-s",
                                "clubsport": "clubsport"})
+    wheel_texture_paths = None
+    if "--original-wheel-textures" in args:
+        option_index = args.index("--original-wheel-textures")
+        if len(args) <= option_index + 2 or args[option_index + 1].startswith("--") or args[option_index + 2].startswith("--"):
+            raise SystemExit("--original-wheel-textures needs <texture-png-directory> <uv-obj-directory>")
+        wheel_texture_paths = (Path(args[option_index + 1]).expanduser(),
+                               Path(args[option_index + 2]).expanduser())
+        del args[option_index:option_index + 3]
     material_preview = "--material-preview" in args
     if material_preview:
         args.remove("--material-preview")
@@ -868,7 +876,72 @@ def main():
                 area.spaces.active.shading.type = 'MATERIAL'
         print("MATERIAL PREVIEW: procedural showroom colours, NOT original NFS5 textures.")
         print("MATERIAL PREVIEW categories:", assigned)
-        print("NOTE: wheels are whole-mesh rubber; original texture/UV decoding remains future work.")
+        print("NOTE: procedural wheel rubber is overridden when --original-wheel-textures is enabled.")
+
+
+    if wheel_texture_paths is not None:
+        texture_directory, wheel_obj_directory = wheel_texture_paths
+        texture_file = texture_directory / "fs-2-15-whf.png"
+        if not texture_file.is_file():
+            raise FileNotFoundError(f"Original NFS5 wheel texture missing: {texture_file}")
+        input_meshes = {
+            46: wheel_obj_directory / "wheel-front-uv.obj",
+            47: wheel_obj_directory / "wheel-rear-uv.obj",
+        }
+        if any(not path.is_file() for path in input_meshes.values()):
+            raise FileNotFoundError(f"UV-mapped wheel OBJs missing from {wheel_obj_directory}; run --wheel-uv-mesh for articles 46 and 47")
+        for wheel_article, path in input_meshes.items():
+            if wheel_article not in wheels:
+                raise RuntimeError(f"Wheel article {wheel_article} was not imported into the assembly")
+            old_names = set(bpy.data.objects.keys())
+            if hasattr(bpy.ops.wm, "obj_import"):
+                bpy.ops.wm.obj_import(filepath=str(path))
+            elif hasattr(bpy.ops.import_scene, "obj"):
+                bpy.ops.import_scene.obj(filepath=str(path))
+            else:
+                raise RuntimeError("OBJ importer unavailable")
+            temporary = [obj for obj in bpy.data.objects if obj.name not in old_names and obj.type == 'MESH']
+            if len(temporary) != 1 or not temporary[0].data.uv_layers:
+                raise RuntimeError(f"UV wheel OBJ must contain one mesh with UV coordinates: {path}")
+            original = wheels[wheel_article]
+            original_mesh = original.data
+            uv_mesh = temporary[0].data
+            uv_mesh.name = f"NFS5_{wheel_article}_UV_mapped"
+            original.data = uv_mesh
+            # The opposite-side TEST_MIRROR was duplicated with shared geometry.
+            for candidate in collection.objects:
+                if candidate.type == 'MESH' and candidate.data == original_mesh and candidate.get("crp_mirrored_hypothesis"):
+                    candidate.data = uv_mesh
+            bpy.data.objects.remove(temporary[0], do_unlink=True)
+            print(f"ORIGINAL WHEEL TEXTURE: article {wheel_article}: UV mesh {len(uv_mesh.polygons)} triangles, {len(uv_mesh.uv_layers.active.data)} corner UVs")
+
+        texture_material = bpy.data.materials.new("NFS5_original_whf_2x_EXPERIMENT")
+        texture_material.use_nodes = True
+        nodes = texture_material.node_tree.nodes
+        bsdf = nodes.get("Principled BSDF")
+        image_node = nodes.new("ShaderNodeTexImage")
+        image_node.image = bpy.data.images.load(str(texture_file.resolve()), check_existing=True)
+        image_node.extension = 'CLIP'
+        image_node.interpolation = 'Linear'
+        uv_node = nodes.new("ShaderNodeUVMap")
+        uv_node.uv_map = wheels[46].data.uv_layers.active.name
+        transform = nodes.new("ShaderNodeVectorMath")
+        transform.operation = 'MULTIPLY_ADD'
+        transform.inputs[1].default_value = (2.0, 2.0, 1.0)
+        transform.inputs[2].default_value = (0.0, 0.0, 0.0)
+        links = texture_material.node_tree.links
+        links.new(uv_node.outputs["UV"], transform.inputs[0])
+        links.new(transform.outputs["Vector"], image_node.inputs["Vector"])
+        links.new(image_node.outputs["Color"], bsdf.inputs["Base Color"])
+        links.new(image_node.outputs["Alpha"], bsdf.inputs["Alpha"])
+        for candidate in collection.objects:
+            if candidate.type == 'MESH' and candidate.get("crp_article") in (46, 47):
+                candidate.data.materials.clear()
+                candidate.data.materials.append(texture_material)
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'VIEW_3D':
+                area.spaces.active.shading.type = 'MATERIAL'
+        print("ORIGINAL WHEEL TEXTURES: experimental 2x UV scaling, whf on all four wheels; sidewalls and reverse face not validated.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46=front, 47=rear; original meshes with exchanged longitudinal CRP positions; mirrored opposite sides (provisional)")
