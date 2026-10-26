@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--wheel-geometry-diagnostic] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -46,6 +46,9 @@ def main():
         wheel_texture_paths = (Path(args[option_index + 1]).expanduser(),
                                Path(args[option_index + 2]).expanduser())
         del args[option_index:option_index + 3]
+    wheel_geometry_diagnostic = "--wheel-geometry-diagnostic" in args
+    if wheel_geometry_diagnostic:
+        args.remove("--wheel-geometry-diagnostic")
     material_preview = "--material-preview" in args
     if material_preview:
         args.remove("--material-preview")
@@ -942,6 +945,42 @@ def main():
             if area.type == 'VIEW_3D':
                 area.spaces.active.shading.type = 'MATERIAL'
         print("ORIGINAL WHEEL TEXTURES: experimental 2x UV scaling, whf on all four wheels; sidewalls and reverse face not validated.")
+
+    if wheel_geometry_diagnostic:
+        # Keep everything available, but display only the four wheel objects.
+        # All other meshes are temporarily hidden for an unambiguous diagnosis.
+        wheel_objects = [
+            obj for obj in collection.objects
+            if obj.type == 'MESH' and obj.get("crp_article") in (46, 47)
+        ]
+        for obj in collection.objects:
+            if obj.type != 'MESH':
+                continue
+            visible = obj in wheel_objects
+            obj.hide_set(not visible)
+            obj.hide_render = not visible
+        for obj in wheel_objects:
+            obj.hide_set(False)
+            obj.hide_render = False
+            mesh = obj.data
+            world_vertices = [obj.matrix_world @ vertex.co for vertex in mesh.vertices]
+            if world_vertices:
+                minimum = tuple(round(min(v[i] for v in world_vertices), 4) for i in range(3))
+                maximum = tuple(round(max(v[i] for v in world_vertices), 4) for i in range(3))
+            else:
+                minimum = maximum = (0, 0, 0)
+            material_names = [slot.material.name if slot.material else "<none>" for slot in obj.material_slots]
+            print(f"WHEEL DIAGNOSTIC {obj.name}: mirrored={bool(obj.get('crp_mirrored_hypothesis'))} "
+                  f"vertices={len(mesh.vertices)} triangles={len(mesh.polygons)} "
+                  f"location={tuple(round(n, 4) for n in obj.location)} "
+                  f"scale={tuple(round(n, 4) for n in obj.scale)} "
+                  f"bounds_min={minimum} bounds_max={maximum} materials={material_names}")
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'VIEW_3D':
+                area.spaces.active.overlay.show_relationship_lines = False
+                area.spaces.active.overlay.show_extras = False
+        print("WHEEL DIAGNOSTIC: all non-wheel meshes hidden in viewport and render; no source OBJ changed.")
+        print("In Blender Outliner, toggle individual wheel objects to identify which produces unwanted geometry.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46=front, 47=rear; original meshes with exchanged longitudinal CRP positions; mirrored opposite sides (provisional)")
