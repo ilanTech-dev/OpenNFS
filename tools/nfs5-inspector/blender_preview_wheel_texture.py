@@ -6,6 +6,7 @@ blender --python tools/nfs5-inspector/blender_preview_wheel_texture.py -- \
   ~/gitHub/project-porsche/textures-png/fs-2-15-whf.png
 Does not modify the main assembly or original game assets.
 """
+import argparse
 import bpy
 import sys
 from pathlib import Path
@@ -14,9 +15,14 @@ from mathutils import Vector
 
 def main():
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    if len(args) not in (2, 3):
-        raise SystemExit("Usage: blender --python blender_preview_wheel_texture.py -- <wheel.obj> <texture.png> [preview.blend]")
-    obj_path, texture_path = map(lambda x: Path(x).expanduser().resolve(), args[:2])
+    parser = argparse.ArgumentParser(description="Preview NFS5 wheel with adjustable non-destructive UV mapping")
+    parser.add_argument("obj")
+    parser.add_argument("texture")
+    parser.add_argument("blend", nargs="?")
+    parser.add_argument("--uv-scale", nargs=2, type=float, metavar=("U", "V"), default=(1.0, 1.0))
+    parser.add_argument("--uv-offset", nargs=2, type=float, metavar=("U", "V"), default=(0.0, 0.0))
+    config = parser.parse_args(args)
+    obj_path, texture_path = map(lambda x: Path(x).expanduser().resolve(), (config.obj, config.texture))
     if not obj_path.is_file() or not texture_path.is_file():
         raise FileNotFoundError("Wheel OBJ and PNG texture must exist locally")
     bpy.ops.object.select_all(action="SELECT")
@@ -35,6 +41,15 @@ def main():
     texture = nodes.new("ShaderNodeTexImage")
     texture.image = bpy.data.images.load(str(texture_path), check_existing=True)
     texture.interpolation = "Linear"
+    texcoord = nodes.new("ShaderNodeUVMap")
+    texcoord.uv_map = wheel.data.uv_layers.active.name
+    mapping = nodes.new("ShaderNodeVectorMath")
+    mapping.operation = "MULTIPLY_ADD"
+    mapping.inputs[1].default_value = (config.uv_scale[0], config.uv_scale[1], 1)
+    mapping.inputs[2].default_value = (config.uv_offset[0], config.uv_offset[1], 0)
+    mat.node_tree.links.new(texcoord.outputs["UV"], mapping.inputs[0])
+    mat.node_tree.links.new(mapping.outputs["Vector"], texture.inputs["Vector"])
+    texture.extension = "CLIP"
     mat.node_tree.links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
     if "Alpha" in bsdf.inputs:
         mat.node_tree.links.new(texture.outputs["Alpha"], bsdf.inputs["Alpha"])
@@ -59,10 +74,10 @@ def main():
             region.view_perspective = "ORTHO"
             region.view_rotation = camera.rotation_euler.to_quaternion()
             region.view_distance = 1.5
-    print(f"WHEEL_TEXTURE_PREVIEW obj={obj_path.name} png={texture_path.name}")
+    print(f"WHEEL_TEXTURE_PREVIEW obj={obj_path.name} png={texture_path.name} uv_scale={tuple(config.uv_scale)} uv_offset={tuple(config.uv_offset)}")
     print(f"vertices={len(wheel.data.vertices)} polygons={len(wheel.data.polygons)} uv_loops={len(wheel.data.uv_layers.active.data)}")
-    if len(args) == 3:
-        target = Path(args[2]).expanduser().resolve()
+    if config.blend:
+        target = Path(config.blend).expanduser().resolve()
         if target.exists():
             raise FileExistsError(f"Refusing to overwrite {target}")
         bpy.ops.wm.save_as_mainfile(filepath=str(target))
