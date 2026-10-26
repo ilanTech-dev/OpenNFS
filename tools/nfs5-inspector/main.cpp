@@ -1190,6 +1190,46 @@ void inspectCrpTextures(const Bytes& b) {
     std::cout<<"\\nNOTE: metadata inspection only; no copyrighted textures extracted.\\n";
 }
 
+
+void exportEmbeddedFsh(const Bytes& b, const std::filesystem::path& destination) {
+    if(b.size()<16)throw std::runtime_error("truncated CRP");
+    const auto count=std::size_t(read32le(b,4)>>5),misc=std::size_t(read32le(b,8));
+    const auto table=std::size_t(read32le(b,12))*16;
+    if(table>b.size()||count>(b.size()-table)/16)throw std::runtime_error("invalid article directory");
+    const auto begin=table+count*16;
+    if(misc>(b.size()-begin)/16)throw std::runtime_error("invalid miscellaneous directory");
+    struct Resource {unsigned id;std::size_t start,length,entries;};
+    std::vector<Resource> archives;
+    for(std::size_t i=0;i<misc;++i){
+        const auto p=begin+i*16;
+        if(b[p+2]!='f'||b[p+3]!='s')continue;
+        const auto bytes=std::size_t(read32le(b,p+4)>>8),offset=std::size_t(read32le(b,p+12));
+        if(offset>b.size()-p||bytes>b.size()-p-offset||bytes<16)
+            throw std::runtime_error("invalid embedded FSH extent");
+        const auto start=p+offset;
+        if(b[start]!='S'||b[start+1]!='H'||b[start+2]!='P'||b[start+3]!='I')
+            throw std::runtime_error("embedded FSH lacks SHPI header");
+        const auto declared=std::size_t(read32le(b,start+4));
+        if(declared>bytes||declared<16)throw std::runtime_error("invalid embedded FSH size");
+        archives.push_back({unsigned(b[p])|(unsigned(b[p+1])<<8),start,declared,read32le(b,start+8)});
+    }
+    if(archives.empty())throw std::runtime_error("no FSH archives found");
+    if(std::filesystem::exists(destination))throw std::runtime_error("output directory already exists");
+    if(!std::filesystem::create_directory(destination))
+        throw std::runtime_error("unable to create destination directory (create parent first)");
+    for(const auto& archive:archives){
+        const auto path=destination/("fs-"+std::to_string(archive.id)+".fsh");
+        std::ofstream out(path,std::ios::binary);
+        if(!out)throw std::runtime_error("cannot open FSH output file");
+        out.write(reinterpret_cast<const char*>(b.data()+archive.start),std::streamsize(archive.length));
+        out.close();
+        if(!out)throw std::runtime_error("failed writing FSH");
+        std::cout<<"Extracted "<<path<<" ("<<archive.length<<" bytes, "
+                 <<archive.entries<<" SHPI entries)\\n";
+    }
+    std::cout<<"Embedded archives extracted locally; source CRP unchanged.\\n";
+}
+
 void inspectComponentMetadata(const Bytes& b) {
     const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
@@ -1845,8 +1885,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh")) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh")) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1875,6 +1915,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--wheel-stream-samples") inspectWheelStreamSamples(output);
         if (argc == 3 && std::string(argv[2]) == "--wheel-index-streams") inspectWheelIndexStreams(output);
         if (argc == 3 && std::string(argv[2]) == "--crp-textures") inspectCrpTextures(output);
+        if (argc == 4 && std::string(argv[2]) == "--extract-fsh") exportEmbeddedFsh(output, std::filesystem::path(argv[3]));
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
         if (argc == 3 && std::string(argv[2]) == "--spoiler-mesh-groups") inspectRearMeshGroups(output, true);
