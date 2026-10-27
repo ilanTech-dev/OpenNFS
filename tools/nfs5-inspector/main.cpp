@@ -1344,7 +1344,8 @@ void inspectGlassLightUv(const Bytes& b) {
             std::cout<<"\n";
             for(std::size_t k=0;k<streams;++k){
                 const auto q=base+48+infos*16+k*8;
-                const auto stream=unsigned(b[q+2])|(unsigned(b[q+3])<<8),offset=std::size_t(read32le(b,q+4));
+                const auto stream=unsigned(b[q+2])|(unsigned(b[q+3])<<8);
+                const auto offset=std::size_t(read32le(b,q+4));
                 std::cout<<"    stream=0x"<<std::hex<<stream<<std::dec<<" offset="<<offset;
                 if(offset>bytes-data||entries>bytes-data-offset){std::cout<<" invalid range\\n";continue;}
                 unsigned low=255,high=0;
