@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -46,6 +46,9 @@ def main():
         wheel_texture_paths = (Path(args[option_index + 1]).expanduser(),
                                Path(args[option_index + 2]).expanduser())
         del args[option_index:option_index + 3]
+    wheel_alpha_test = "--wheel-alpha-test" in args
+    if wheel_alpha_test:
+        args.remove("--wheel-alpha-test")
     wheel_group_diagnostic = "--wheel-group-diagnostic" in args
     if wheel_group_diagnostic:
         args.remove("--wheel-group-diagnostic")
@@ -948,6 +951,49 @@ def main():
             if area.type == 'VIEW_3D':
                 area.spaces.active.shading.type = 'MATERIAL'
         print("ORIGINAL WHEEL TEXTURES: experimental 2x UV scaling, whf on all four wheels; sidewalls and reverse face not validated.")
+
+    if wheel_alpha_test:
+        if wheel_texture_paths is None:
+            raise SystemExit("--wheel-alpha-test requires --original-wheel-textures")
+        rubber = bpy.data.materials.get("NFS5_WHEEL_RUBBER_ALPHA_TEST")
+        if rubber is None:
+            rubber = bpy.data.materials.new("NFS5_WHEEL_RUBBER_ALPHA_TEST")
+        rubber.diffuse_color = (0.025, 0.027, 0.03, 1.0)
+        rubber.use_nodes = True
+        rubber_bsdf = rubber.node_tree.nodes.get("Principled BSDF")
+        rubber_bsdf.inputs["Base Color"].default_value = rubber.diffuse_color
+        rubber_bsdf.inputs["Roughness"].default_value = 0.85
+
+        # Duplicate the original texture shader, but threshold alpha sharply,
+        # approximating the source game's transparent wheel billboard.
+        clipped = texture_material.copy()
+        clipped.name = "NFS5_WHEEL_WHf_ALPHA_CLIP_TEST"
+        shader = clipped.node_tree.nodes.get("Principled BSDF")
+        tex = next(n for n in clipped.node_tree.nodes if n.type == 'TEX_IMAGE')
+        threshold = clipped.node_tree.nodes.new("ShaderNodeMath")
+        threshold.operation = 'GREATER_THAN'
+        threshold.inputs[1].default_value = 0.45
+        clipped.node_tree.links.new(tex.outputs["Alpha"], threshold.inputs[0])
+        clipped.node_tree.links.new(threshold.outputs[0], shader.inputs["Alpha"])
+        if hasattr(clipped, 'surface_render_method'):
+            clipped.surface_render_method = 'DITHERED'
+        elif hasattr(clipped, 'blend_method'):
+            clipped.blend_method = 'CLIP'
+            if hasattr(clipped, 'alpha_threshold'):
+                clipped.alpha_threshold = 0.45
+
+        for article in (46, 47):
+            wheel = wheels.get(article)
+            if wheel is None or len(wheel.data.polygons) != 114:
+                raise RuntimeError(f"Expected wheel article {article} with 114 triangles")
+            mesh = wheel.data
+            mesh.materials.clear()
+            mesh.materials.append(rubber)
+            mesh.materials.append(clipped)
+            for face in mesh.polygons:
+                face.material_index = 0 if face.index < 57 else 1
+            print(f"WHEEL ALPHA TEST article={article}: group 0x1000 rubber, 0x1001 clipped whf; mirrored side shares mesh")
+        print("WHEEL ALPHA TEST: experimental per-group material assignment; no geometry deleted.")
 
     if wheel_group_diagnostic:
         if wheel_texture_paths is None:
