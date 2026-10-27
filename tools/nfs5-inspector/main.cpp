@@ -1231,6 +1231,72 @@ void exportEmbeddedFsh(const Bytes& b, const std::filesystem::path& destination)
     std::cout<<"Embedded archives extracted locally; source CRP unchanged.\\n";
 }
 
+
+void inspectBodyNormalAlignment(const Bytes& b) {
+    const auto n=std::size_t(read32le(b,4)>>5),dir=std::size_t(read32le(b,12))*16;
+    if(dir>b.size()||n>(b.size()-dir)/16||n<=5)throw std::runtime_error("invalid body article");
+    const auto at=dir+5*16,rel=std::size_t(read32le(b,at+12)),len=std::size_t(read32le(b,at+8));
+    if(rel>(b.size()-at)/16)throw std::runtime_error("invalid body offset");
+    const auto begin=at+rel*16;
+    if(len>(b.size()-begin)/16)throw std::runtime_error("invalid body descriptors");
+    std::size_t vp=SIZE_MAX,np=SIZE_MAX,vc=0,nc=0;
+    for(std::size_t i=0;i<len;++i){
+        const auto p=begin+i*16;
+        const auto level=unsigned(b[p])|(unsigned(b[p+1])<<8);
+        if(level!=1)continue;
+        const auto tag=std::string{char(b[p+2]),char(b[p+3])};
+        const auto count=std::size_t(read32le(b,p+8)),bytes=std::size_t(read32le(b,p+4)>>8),off=std::size_t(read32le(b,p+12));
+        if(!count||count>SIZE_MAX/16||bytes!=count*16||off>b.size()-p||bytes>b.size()-p-off)continue;
+        if(tag=="tv"){vp=p+off;vc=count;}
+        if(tag=="mn"){np=p+off;nc=count;}
+    }
+    if(vp==SIZE_MAX||np==SIZE_MAX||vc!=nc)throw std::runtime_error("body positions and normals do not correspond");
+    auto xyz=[&](std::size_t base,std::size_t index){
+        std::array<double,3> v{};
+        for(int axis=0;axis<3;++axis){auto bits=read32le(b,base+index*16+axis*4);float x;std::memcpy(&x,&bits,4);v[axis]=x;}
+        return v;
+    };
+    std::size_t triangles=0,positive=0,negative=0,nearZero=0;
+    double sum=0;
+    std::cout<<"Body normal diagnostic: positions="<<vc<<" normals="<<nc<<"\n";
+    for(std::size_t i=0;i<len;++i){
+        const auto p=begin+i*16;
+        if(b[p+2]!='r'||b[p+3]!='p')continue;
+        const auto level=(unsigned(b[p])|(unsigned(b[p+1])<<8))>>12;
+        if(level!=1)continue;
+        const auto bytes=std::size_t(read32le(b,p+4)>>8),off=std::size_t(read32le(b,p+12)),entries=std::size_t(read32le(b,p+8));
+        if(off>b.size()-p||bytes>b.size()-p-off||bytes<48||entries%3)continue;
+        const auto base=p+off,infos=std::size_t(read32le(b,base+40)),streams=std::size_t(read32le(b,base+44));
+        if(infos>(bytes-48)/16||streams>(bytes-48-infos*16)/8)continue;
+        const auto data=48+infos*16+streams*8;
+        std::size_t streamOff=SIZE_MAX,adjust=SIZE_MAX;
+        for(std::size_t k=0;k<streams;++k){auto q=base+48+infos*16+k*8;auto id=unsigned(b[q+2])|(unsigned(b[q+3])<<8);if(id==0x4976)streamOff=read32le(b,q+4);}
+        for(std::size_t k=0;k<infos;++k){auto q=base+48+k*16;auto id=unsigned(b[q+10])|(unsigned(b[q+11])<<8);auto l=unsigned(b[q+12])|(unsigned(b[q+13])<<8);auto off2=read32le(b,q+4);if(id==0&&l==1&&off2%16==0)adjust=off2/16;}
+        if(streamOff==SIZE_MAX||adjust==SIZE_MAX||streamOff>bytes-data||entries>bytes-data-streamOff)continue;
+        for(std::size_t k=0;k<entries;k+=3){
+            std::size_t index[3];
+            for(int c=0;c<3;++c)index[c]=std::size_t(b[base+data+streamOff+k+c])+adjust;
+            if(index[0]>=vc||index[1]>=vc||index[2]>=vc)continue;
+            const auto a=xyz(vp,index[0]),bb=xyz(vp,index[1]),c=xyz(vp,index[2]);
+            const std::array<double,3> u{bb[0]-a[0],bb[1]-a[1],bb[2]-a[2]},v{c[0]-a[0],c[1]-a[1],c[2]-a[2]};
+            const std::array<double,3> cross{u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]};
+            const double length=std::sqrt(cross[0]*cross[0]+cross[1]*cross[1]+cross[2]*cross[2]);
+            if(length<1e-10)continue;
+            const auto normal=xyz(np,index[0]);
+            const double nl=std::sqrt(normal[0]*normal[0]+normal[1]*normal[1]+normal[2]*normal[2]);
+            if(nl<1e-10)continue;
+            const double dot=(cross[0]*normal[0]+cross[1]*normal[1]+cross[2]*normal[2])/(length*nl);
+            if(dot>0.2)++positive;else if(dot< -0.2)++negative;else ++nearZero;
+            sum+=dot;
+            if(triangles<12)std::cout<<"  face["<<triangles<<"] vertices="<<index[0]<<","<<index[1]<<","<<index[2]<<" normalDot="<<dot<<"\n";
+            ++triangles;
+        }
+    }
+    std::cout<<"Body normal alignment: tested="<<triangles<<" positive="<<positive<<" negative="<<negative<<" ambiguous="<<nearZero
+             <<" meanDot="<<(triangles?sum/triangles:0)<<"\n";
+    std::cout<<"NOTE: diagnostic compares the first stored vertex normal per face, not Blender's evaluated loop normals.\\n";
+}
+
 void inspectComponentMetadata(const Bytes& b) {
     const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
@@ -1886,8 +1952,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || std::string(argv[2]) == "--article-normal-mesh")) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --article-normal-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || std::string(argv[2]) == "--article-normal-mesh")) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--body-normal-alignment" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --article-normal-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --body-normal-alignment | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1916,6 +1982,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--wheel-stream-samples") inspectWheelStreamSamples(output);
         if (argc == 3 && std::string(argv[2]) == "--wheel-index-streams") inspectWheelIndexStreams(output);
         if (argc == 3 && std::string(argv[2]) == "--crp-textures") inspectCrpTextures(output);
+        if (argc == 3 && std::string(argv[2]) == "--body-normal-alignment") inspectBodyNormalAlignment(output);
         if (argc == 4 && std::string(argv[2]) == "--extract-fsh") exportEmbeddedFsh(output, std::filesystem::path(argv[3]));
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
