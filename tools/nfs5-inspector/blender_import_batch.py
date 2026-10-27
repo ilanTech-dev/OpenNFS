@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--original-body-normals <normal-obj-file>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--original-body-normals <normal-obj-file>] [--reversed-normal-parts <obj-directory>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -45,6 +45,13 @@ def main():
             raise SystemExit("--original-body-normals needs an OBJ file")
         original_body_normals_path = Path(args[option_index + 1]).expanduser()
         del args[option_index:option_index + 2]
+    normal_parts_dir = None
+    if "--reversed-normal-parts" in args:
+        idx = args.index("--reversed-normal-parts")
+        if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+            raise SystemExit("--reversed-normal-parts requires an OBJ directory")
+        normal_parts_dir = Path(args[idx + 1]).expanduser()
+        del args[idx:idx + 2]
     wheel_texture_paths = None
     if "--original-wheel-textures" in args:
         option_index = args.index("--original-wheel-textures")
@@ -845,6 +852,47 @@ def main():
         bpy.data.objects.remove(temporary[0], do_unlink=True)
         print(f"ORIGINAL BODY NORMALS: replaced article 5 mesh ({len(replacement.vertices)} vertices, "
               f"{len(replacement.polygons)} triangles); smooth shading enabled, source normal import subject to Blender OBJ interpretation.")
+
+    if normal_parts_dir is not None:
+        # Preserve all object transforms, parenting, hinge constraints and wheel meshes.
+        # The same article may appear more than once (e.g. a mirrored door).
+        for article in (5, 20, 13, 28):
+            source = normal_parts_dir / f"article-{article}-reversed.obj"
+            if not source.is_file():
+                raise FileNotFoundError(f"Missing reversed-normal article OBJ: {source}")
+            destinations = [o for o in collection.objects
+                            if o.type == 'MESH' and o.get('crp_article') == article]
+            if not destinations:
+                print(f"REVERSED NORMAL PARTS: article {article} not present; skipped")
+                continue
+            previous_names = set(bpy.data.objects.keys())
+            if hasattr(bpy.ops.wm, "obj_import"):
+                bpy.ops.wm.obj_import(filepath=str(source))
+            elif hasattr(bpy.ops.import_scene, "obj"):
+                bpy.ops.import_scene.obj(filepath=str(source))
+            else:
+                raise RuntimeError("Blender OBJ importer unavailable")
+            temporary = [o for o in bpy.data.objects
+                         if o.name not in previous_names and o.type == 'MESH']
+            if len(temporary) != 1:
+                raise RuntimeError(f"Expected one normals mesh for article {article}, got {len(temporary)}")
+            mesh = temporary[0].data
+            target = destinations[0]
+            if len(mesh.vertices) != len(target.data.vertices) or len(mesh.polygons) != len(target.data.polygons):
+                raise RuntimeError(f"Article {article} topology mismatch: "
+                                   f"imported {len(mesh.vertices)}/{len(mesh.polygons)}, "
+                                   f"assembly {len(target.data.vertices)}/{len(target.data.polygons)}")
+            mesh.name = f"NFS5_article_{article}_reversed_normals_EXPERIMENT"
+            for face in mesh.polygons:
+                face.use_smooth = True
+            original_mesh = target.data
+            for obj in collection.objects:
+                if obj.type == 'MESH' and (obj.get('crp_article') == article or obj.data == original_mesh):
+                    obj.data = mesh
+            bpy.data.objects.remove(temporary[0], do_unlink=True)
+            print(f"REVERSED NORMAL PARTS: article={article} vertices={len(mesh.vertices)} "
+                  f"triangles={len(mesh.polygons)} destinations={len(destinations)}")
+        print("REVERSED NORMAL PARTS: experimental normals on 5, 20, 13, 28; Blender import interpretation not yet verified.")
 
     if material_preview:
         # Readable procedural showroom colours, NOT decoded NFS5 textures.
