@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--wheel-geometry-diagnostic] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -46,6 +46,9 @@ def main():
         wheel_texture_paths = (Path(args[option_index + 1]).expanduser(),
                                Path(args[option_index + 2]).expanduser())
         del args[option_index:option_index + 3]
+    wheel_group_diagnostic = "--wheel-group-diagnostic" in args
+    if wheel_group_diagnostic:
+        args.remove("--wheel-group-diagnostic")
     wheel_geometry_diagnostic = "--wheel-geometry-diagnostic" in args
     if wheel_geometry_diagnostic:
         args.remove("--wheel-geometry-diagnostic")
@@ -945,6 +948,53 @@ def main():
             if area.type == 'VIEW_3D':
                 area.spaces.active.shading.type = 'MATERIAL'
         print("ORIGINAL WHEEL TEXTURES: experimental 2x UV scaling, whf on all four wheels; sidewalls and reverse face not validated.")
+
+    if wheel_group_diagnostic:
+        if wheel_texture_paths is None:
+            raise SystemExit("--wheel-group-diagnostic requires --original-wheel-textures")
+        # Both first-level rp groups in articles 46/47 have 171 indices,
+        # i.e. 57 triangles each. Preserve original face order in the OBJ.
+        for article in (46, 47):
+            obj = wheels.get(article)
+            if obj is None:
+                raise RuntimeError(f"Missing wheel article {article}")
+            mesh = obj.data
+            if len(mesh.polygons) != 114:
+                raise RuntimeError(f"Expected 114 first-level wheel triangles, got {len(mesh.polygons)} for {article}")
+            meshes = mesh
+            meshes.materials.clear()
+            for group, color in enumerate(((1.0, 0.08, 0.12, 1.0), (0.02, 0.8, 1.0, 1.0))):
+                name = f"NFS5_WHEEL_GROUP_0x100{group}_DEBUG"
+                mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+                mat.diffuse_color = color
+                mat.use_nodes = True
+                bsdf = mat.node_tree.nodes.get("Principled BSDF")
+                bsdf.inputs["Base Color"].default_value = color
+                bsdf.inputs["Alpha"].default_value = 1.0
+                mat.use_nodes = True
+                meshes.materials.append(mat)
+                first, last = group * 57, (group + 1) * 57
+                for face in meshes.polygons[first:last]:
+                    face.material_index = group
+                used = set(i for face in meshes.polygons[first:last] for i in face.vertices)
+                coords = [meshes.vertices[i].co for i in used]
+                mins = tuple(round(min(v[k] for v in coords), 4) for k in range(3))
+                maxs = tuple(round(max(v[k] for v in coords), 4) for k in range(3))
+                print(f"WHEEL GROUP DIAGNOSTIC article={article} group=0x100{group} "
+                      f"triangles=57 vertices={len(used)} local_min={mins} local_max={maxs}")
+        for obj in collection.objects:
+            if obj.type == 'MESH' and obj.get("crp_article") not in (46, 47):
+                obj.hide_set(True)
+                obj.hide_render = True
+            if obj.type == 'MESH' and obj.get("crp_article") in (46, 47):
+                obj.hide_set(False)
+                obj.hide_render = False
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'VIEW_3D':
+                area.spaces.active.shading.type = 'MATERIAL'
+                area.spaces.active.overlay.show_relationship_lines = False
+                area.spaces.active.overlay.show_extras = False
+        print("WHEEL GROUP DIAGNOSTIC: red=0x1000, cyan=0x1001, all other meshes hidden.")
 
     if wheel_geometry_diagnostic:
         # Keep everything available, but display only the four wheel objects.
