@@ -1300,6 +1300,65 @@ void inspectBodyNormalAlignment(const Bytes& b) {
     std::cout<<"NOTE: diagnostic compares the first stored vertex normal per face, not Blender's evaluated loop normals.\\n";
 }
 
+
+void inspectGlassLightUv(const Bytes& b) {
+    const auto n=std::size_t(read32le(b,4)>>5),dir=std::size_t(read32le(b,12))*16;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad directory");
+    for(const std::size_t article: {std::size_t(36),std::size_t(32),std::size_t(17),std::size_t(18)}) {
+        if(article>=n)continue;
+        const auto at=dir+article*16,rel=std::size_t(read32le(b,at+12)),len=std::size_t(read32le(b,at+8));
+        if(rel>(b.size()-at)/16)throw std::runtime_error("bad article offset");
+        const auto begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("bad article extent");
+        std::size_t positions=0,uvs=0,normals=0;
+        for(std::size_t i=0;i<len;++i) {
+            const auto p=begin+i*16;
+            const auto level=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if(level!=1)continue;
+            const std::string tag{char(b[p+2]),char(b[p+3])};
+            const auto count=std::size_t(read32le(b,p+8));
+            if(tag=="tv")positions=count;
+            if(tag=="vu")uvs=count;
+            if(tag=="mn")normals=count;
+        }
+        std::cout<<"Article "<<article<<" "<<articleName(b,article)
+                 <<" positions="<<positions<<" uvPairs="<<uvs<<" normals="<<normals<<"\n";
+        for(std::size_t i=0;i<len;++i) {
+            const auto p=begin+i*16;
+            if(b[p+2]!='r'||b[p+3]!='p')continue;
+            const auto id=unsigned(b[p])|(unsigned(b[p+1])<<8);
+            if((id>>12)!=1)continue;
+            const auto bytes=std::size_t(read32le(b,p+4)>>8),off=std::size_t(read32le(b,p+12)),entries=std::size_t(read32le(b,p+8));
+            if(off>b.size()-p||bytes>b.size()-p-off||bytes<48)continue;
+            const auto base=p+off,infos=std::size_t(read32le(b,base+40)),streams=std::size_t(read32le(b,base+44));
+            if(infos>(bytes-48)/16||streams>(bytes-48-infos*16)/8)continue;
+            const auto data=48+infos*16+streams*8;
+            std::cout<<"  polygon=0x"<<std::hex<<id<<std::dec<<" entries="<<entries;
+            for(std::size_t k=0;k<infos;++k){
+                const auto q=base+48+k*16;
+                const auto attr=unsigned(b[q+10])|(unsigned(b[q+11])<<8);
+                if(attr==0||attr==1||attr==2)
+                    std::cout<<" attr"<<attr<<"=(offset:"<<read32le(b,q+4)<<",bytes:"
+                             <<(unsigned(b[q+8])|(unsigned(b[q+9])<<8))<<")";
+            }
+            std::cout<<"\n";
+            for(std::size_t k=0;k<streams;++k){
+                const auto q=base+48+infos*16+k*8;
+                const auto stream=unsigned(b[q+2])|(unsigned(b[q+3])<<8),offset=std::size_t(read32le(b,q+4));
+                std::cout<<"    stream=0x"<<std::hex<<stream<<std::dec<<" offset="<<offset;
+                if(offset>bytes-data||entries>bytes-data-offset){std::cout<<" invalid range\\n";continue;}
+                unsigned low=255,high=0;
+                for(std::size_t j=0;j<entries;++j){unsigned v=b[base+data+offset+j];low=std::min(low,v);high=std::max(high,v);}
+                std::cout<<" range="<<low<<".."<<high<<" sample=";
+                for(std::size_t j=0;j<std::min<std::size_t>(9,entries);++j)
+                    std::cout<<(j?",":"")<<unsigned(b[base+data+offset+j]);
+                std::cout<<"\n";
+            }
+        }
+    }
+    std::cout<<"NOTE: range fits alone do not prove UV mapping or material selection.\\n";
+}
+
 void inspectComponentMetadata(const Bytes& b) {
     const std::size_t dir=std::size_t(read32le(b,12))*16,n=read32le(b,4)>>5;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("bad article directory");
@@ -1955,8 +2014,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || (std::string(argv[2]) == "--article-normal-mesh" || std::string(argv[2]) == "--article-normal-mesh-reversed"))) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--body-normal-alignment" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --article-normal-mesh <index> <new-obj-file> | --article-normal-mesh-reversed <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --body-normal-alignment | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || (std::string(argv[2]) == "--article-normal-mesh" || std::string(argv[2]) == "--article-normal-mesh-reversed"))) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--body-normal-alignment" || std::string(argv[2]) == "--glass-light-uv" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --article-normal-mesh <index> <new-obj-file> | --article-normal-mesh-reversed <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --body-normal-alignment | --glass-light-uv | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1986,6 +2045,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--wheel-index-streams") inspectWheelIndexStreams(output);
         if (argc == 3 && std::string(argv[2]) == "--crp-textures") inspectCrpTextures(output);
         if (argc == 3 && std::string(argv[2]) == "--body-normal-alignment") inspectBodyNormalAlignment(output);
+        if (argc == 3 && std::string(argv[2]) == "--glass-light-uv") inspectGlassLightUv(output);
         if (argc == 4 && std::string(argv[2]) == "--extract-fsh") exportEmbeddedFsh(output, std::filesystem::path(argv[3]));
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
