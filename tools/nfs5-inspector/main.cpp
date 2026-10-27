@@ -409,7 +409,7 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
              <<used<<" polygon descriptors; skipped "<<skipped<<" -> "<<dest<<"\n";
 }
 
-void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesystem::path& dest, bool uvMode=false) {
+void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesystem::path& dest, bool uvMode=false, bool normalMode=false) {
     if(uvMode && article!=46 && article!=47)throw std::runtime_error("wheel UV export requires article 46 or 47");
     if (std::filesystem::exists(dest)) throw std::runtime_error("OBJ already exists");
     const std::size_t n = read32le(b,4)>>5, dir = std::size_t(read32le(b,12))*16;
@@ -444,7 +444,7 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
     }
     const auto selected=candidates.front();
     std::size_t uvStart=SIZE_MAX,uvCount=0,normStart=SIZE_MAX,normCount=0;
-    if(uvMode){
+    if(uvMode || normalMode){
         for(std::size_t q=begin;q<end;q+=16){
             const std::string tag{char(b[q+2]),char(b[q+3])};
             const unsigned level=unsigned(b[q])|(unsigned(b[q+1])<<8);
@@ -455,8 +455,8 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
             if(tag=="vu"){uvStart=q+off;uvCount=count;}
             if(tag=="mn"){normStart=q+off;normCount=count;}
         }
-        if(uvStart==SIZE_MAX||normStart==SIZE_MAX||normCount!=selected.count)
-            throw std::runtime_error("wheel UV/normal streams absent or inconsistent");
+        if((uvMode&&uvStart==SIZE_MAX)||normStart==SIZE_MAX||normCount!=selected.count)
+            throw std::runtime_error("level-1 UV/normal streams absent or inconsistent");
     }
     std::vector<std::uint32_t> textureFaces;
     std::vector<std::uint32_t> faces;
@@ -525,8 +525,8 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
             throw std::runtime_error("non-finite vertex");
         out<<"v "<<x<<" "<<y<<" "<<z<<"\n";
     }
-    if(uvMode){
-        for(std::size_t i=0;i<uvCount;++i){
+    if(uvMode || normalMode){
+        if(uvMode)for(std::size_t i=0;i<uvCount;++i){
             const auto at=uvStart+i*8;
             const auto ub=read32le(b,at),vb=read32le(b,at+4);
             float u,v;std::memcpy(&u,&ub,4);std::memcpy(&v,&vb,4);
@@ -550,7 +550,8 @@ void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesyste
             out<<"f";
             for(std::size_t k=0;k<3;++k)out<<" "<<faces[i+k]<<"/"<<textureFaces[i+k]<<"/"<<faces[i+k];
             out<<"\n";
-        }else out<<"f "<<faces[i]<<" "<<faces[i+1]<<" "<<faces[i+2]<<"\n";
+        }else if(normalMode)out<<"f "<<faces[i]<<"//"<<faces[i]<<" "<<faces[i+1]<<"//"<<faces[i+1]<<" "<<faces[i+2]<<"//"<<faces[i+2]<<"\n";
+        else out<<"f "<<faces[i]<<" "<<faces[i+1]<<" "<<faces[i+2]<<"\n";
     }
     out.close();
     if(!out)throw std::runtime_error("failed writing OBJ");
@@ -1885,8 +1886,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh")) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || std::string(argv[2]) == "--article-normal-mesh")) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --article-normal-mesh <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -1923,12 +1924,12 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--panel-animation-records") inspectPanelAnimationRecords(output);
         if (argc == 4 && std::string(argv[2]) == "--body-mesh")
             exportBodyMesh(output, std::filesystem::path(argv[3]));
-        if (argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh")) {
+        if (argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || std::string(argv[2]) == "--article-normal-mesh")) {
             const std::string value(argv[3]);
             std::size_t consumed = 0;
             const auto index = std::stoull(value, &consumed, 10);
             if (consumed != value.size()) throw std::runtime_error("invalid article index");
-            exportArticleMesh(output, static_cast<std::size_t>(index), std::filesystem::path(argv[4]), std::string(argv[2])=="--wheel-uv-mesh");
+            exportArticleMesh(output, static_cast<std::size_t>(index), std::filesystem::path(argv[4]), std::string(argv[2])=="--wheel-uv-mesh", std::string(argv[2])=="--article-normal-mesh");
         }
         if (argc == 4 && std::string(argv[2]) == "--polygons") {
             const std::string arg(argv[3]);
