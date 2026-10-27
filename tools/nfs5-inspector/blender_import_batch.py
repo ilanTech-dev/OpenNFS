@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--original-body-normals <normal-obj-file>] [--reversed-normal-parts <obj-directory>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--glass-light-audit] [--original-body-normals <normal-obj-file>] [--reversed-normal-parts <obj-directory>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -69,6 +69,9 @@ def main():
     wheel_geometry_diagnostic = "--wheel-geometry-diagnostic" in args
     if wheel_geometry_diagnostic:
         args.remove("--wheel-geometry-diagnostic")
+    glass_light_audit = "--glass-light-audit" in args
+    if glass_light_audit:
+        args.remove("--glass-light-audit")
     material_preview = "--material-preview" in args
     if material_preview:
         args.remove("--material-preview")
@@ -1161,6 +1164,32 @@ def main():
                 area.spaces.active.overlay.show_extras = False
         print("WHEEL DIAGNOSTIC: all non-wheel meshes hidden in viewport and render; no source OBJ changed.")
         print("In Blender Outliner, toggle individual wheel objects to identify which produces unwanted geometry.")
+
+    if glass_light_audit:
+        # Read-only geometry/material survey. Existing batch OBJs generally lack
+        # UVs; do not pretend the extracted texture can be mapped correctly.
+        names = ("glass", "window", "wind", "light", "lamp", "lens",
+                 "indicator", "turn", "rear", "roof", "bonnet", "front")
+        print("GLASS LIGHT AUDIT: candidate original texture resources:")
+        print("  fs-3: glas (64x64), fs-0: lit1/lit2/lit3, fs-1: head")
+        print("  Candidates are filenames only: article-material links unverified.")
+        found = 0
+        for obj in sorted(collection.objects, key=lambda o: o.name):
+            if obj.type != 'MESH':
+                continue
+            name = str(obj.get("crp_name") or obj.name)
+            if not any(token in name.lower() for token in names):
+                continue
+            mesh = obj.data
+            mats = [slot.material.name if slot.material else "<none>"
+                    for slot in obj.material_slots]
+            print(f"GLASS LIGHT AUDIT: article={obj.get('crp_article')} name={name} "
+                  f"vertices={len(mesh.vertices)} faces={len(mesh.polygons)} "
+                  f"uv_layers={len(mesh.uv_layers)} hidden={obj.hide_get()} "
+                  f"materials={mats}")
+            found += 1
+        print(f"GLASS LIGHT AUDIT: listed {found} candidate objects. "
+              "No material assignments changed. No UVs are invented.")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46=front, 47=rear; original meshes with exchanged longitudinal CRP positions; mirrored opposite sides (provisional)")
