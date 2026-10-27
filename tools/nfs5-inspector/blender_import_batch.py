@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--original-body-normals <normal-obj-file>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -38,6 +38,13 @@ def main():
     rear_preset = take_option("--rear-preset",
                               {"carrera": "carrera", "turbo-s": "turbo-s",
                                "clubsport": "clubsport"})
+    original_body_normals_path = None
+    if "--original-body-normals" in args:
+        option_index = args.index("--original-body-normals")
+        if option_index + 1 >= len(args) or args[option_index + 1].startswith("--"):
+            raise SystemExit("--original-body-normals needs an OBJ file")
+        original_body_normals_path = Path(args[option_index + 1]).expanduser()
+        del args[option_index:option_index + 2]
     wheel_texture_paths = None
     if "--original-wheel-textures" in args:
         option_index = args.index("--original-wheel-textures")
@@ -809,6 +816,35 @@ def main():
         print("All other meshes hidden. Orbit Blender view underneath to compare underside faces.")
         print("Candidate positions use provisional mapping, not calibrated showroom-open poses.")
 
+
+    if original_body_normals_path is not None:
+        if not original_body_normals_path.is_file():
+            raise FileNotFoundError(f"Normals-aware body OBJ not found: {original_body_normals_path}")
+        original_body = next((obj for obj in collection.objects
+                              if obj.type == 'MESH' and obj.get("crp_article") == 5), None)
+        if original_body is None:
+            raise RuntimeError("Body article 5 is absent from the imported assembly")
+        existing_names = set(bpy.data.objects.keys())
+        if hasattr(bpy.ops.wm, "obj_import"):
+            bpy.ops.wm.obj_import(filepath=str(original_body_normals_path))
+        elif hasattr(bpy.ops.import_scene, "obj"):
+            bpy.ops.import_scene.obj(filepath=str(original_body_normals_path))
+        else:
+            raise RuntimeError("OBJ importer unavailable")
+        temporary = [obj for obj in bpy.data.objects if obj.name not in existing_names
+                     and obj.type == 'MESH']
+        if len(temporary) != 1:
+            raise RuntimeError("Expected exactly one normals-aware body mesh")
+        replacement = temporary[0].data
+        if len(replacement.vertices) != len(original_body.data.vertices) or len(replacement.polygons) != len(original_body.data.polygons):
+            raise RuntimeError("Body normal mesh topology differs from current assembly; aborting replacement")
+        replacement.name = "NFS5_Body_Original_Vertex_Normals_Experimental"
+        for polygon in replacement.polygons:
+            polygon.use_smooth = True
+        original_body.data = replacement
+        bpy.data.objects.remove(temporary[0], do_unlink=True)
+        print(f"ORIGINAL BODY NORMALS: replaced article 5 mesh ({len(replacement.vertices)} vertices, "
+              f"{len(replacement.polygons)} triangles); smooth shading enabled, source normal import subject to Blender OBJ interpretation.")
 
     if material_preview:
         # Readable procedural showroom colours, NOT decoded NFS5 textures.
