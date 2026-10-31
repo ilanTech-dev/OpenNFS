@@ -50,9 +50,9 @@ def main():
     ap.add_argument("batch", type=Path)
     ap.add_argument("metadata", type=Path)
     ap.add_argument("--save-blend", type=Path)
-    ap.add_argument("--bonnet-y-offset", type=float, default=0.0,
+    ap.add_argument("--bonnet-y-offset", type=float, default=1.21,
                     help="Additional Blender +Y offset for article 3; requires --panel-transform-preview")
-    ap.add_argument("--decklid-y-offset", type=float, default=0.0,
+    ap.add_argument("--decklid-y-offset", type=float, default=-2.23,
                     help="Additional Blender Y offset for article 6; requires --panel-transform-preview")
     ap.add_argument("--panel-transform-preview", action="store_true",
                     help="Apply candidate CRP translation and X=90-degree rotation to articles 3 and 6")
@@ -60,7 +60,7 @@ def main():
                     help="Diagnostic mode: show every imported mesh, including alternatives")
     options = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = ap.parse_args(options)
-    if not args.panel_transform_preview and (args.bonnet_y_offset or args.decklid_y_offset):
+    if not args.panel_transform_preview and (args.bonnet_y_offset != 1.21 or args.decklid_y_offset != -2.23):
         ap.error("Y offsets require --panel-transform-preview")
     batch = args.batch.expanduser().resolve()
     meta_path = args.metadata.expanduser().resolve()
