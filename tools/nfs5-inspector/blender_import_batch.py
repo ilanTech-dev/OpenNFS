@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--glass-light-audit] [--original-body-normals <normal-obj-file>] [--reversed-normal-parts <obj-directory>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--glass-light-audit] [--original-body-normals <normal-obj-file>] [--reversed-normal-parts <obj-directory>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--original-headlights <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -52,6 +52,13 @@ def main():
             raise SystemExit("--reversed-normal-parts requires an OBJ directory")
         normal_parts_dir = Path(args[idx + 1]).expanduser()
         del args[idx:idx + 2]
+    original_headlight_paths = None
+    if "--original-headlights" in args:
+        idx = args.index("--original-headlights")
+        if idx + 2 >= len(args) or args[idx + 1].startswith("--") or args[idx + 2].startswith("--"):
+            raise SystemExit("--original-headlights needs <png-directory> <uv-obj-directory>")
+        original_headlight_paths = (Path(args[idx + 1]).expanduser(), Path(args[idx + 2]).expanduser())
+        del args[idx:idx + 3]
     wheel_texture_paths = None
     if "--original-wheel-textures" in args:
         option_index = args.index("--original-wheel-textures")
@@ -1164,6 +1171,73 @@ def main():
                 area.spaces.active.overlay.show_extras = False
         print("WHEEL DIAGNOSTIC: all non-wheel meshes hidden in viewport and render; no source OBJ changed.")
         print("In Blender Outliner, toggle individual wheel objects to identify which produces unwanted geometry.")
+
+    if original_headlight_paths is not None:
+        png_dir, uv_dir = original_headlight_paths
+        source = uv_dir / "article-32-uv.obj"
+        image_path = png_dir / "fs-0-23-lit1.png"
+        if not source.is_file() or not image_path.is_file():
+            raise FileNotFoundError(f"Missing original headlight OBJ or PNG: {source}, {image_path}")
+        lights = [o for o in collection.objects if o.type == 'MESH' and o.get("crp_article") == 32]
+        if not lights:
+            raise RuntimeError("Light1 article 32 is absent from the assembly")
+        before = set(bpy.data.objects.keys())
+        if hasattr(bpy.ops.wm, "obj_import"):
+            bpy.ops.wm.obj_import(filepath=str(source))
+        elif hasattr(bpy.ops.import_scene, "obj"):
+            bpy.ops.import_scene.obj(filepath=str(source))
+        else:
+            raise RuntimeError("OBJ importer unavailable")
+        temporary = [o for o in bpy.data.objects if o.name not in before and o.type == 'MESH']
+        if len(temporary) != 1 or not temporary[0].data.uv_layers:
+            raise RuntimeError("Light1 OBJ must contain exactly one UV-mapped mesh")
+        mesh = temporary[0].data
+        original_mesh = lights[0].data
+        if len(mesh.vertices) != len(original_mesh.vertices) or len(mesh.polygons) != len(original_mesh.polygons):
+            raise RuntimeError("Light1 UV mesh topology mismatch")
+        mesh.name = "NFS5_Light1_lit1_Vflip_EXPERIMENT"
+        mat = bpy.data.materials.new("NFS5_Light1_lit1_alpha_test")
+        mat.use_nodes = True
+        nodes, links = mat.node_tree.nodes, mat.node_tree.links
+        bsdf = nodes.get("Principled BSDF")
+        bsdf.inputs["Roughness"].default_value = 0.30
+        uv = nodes.new("ShaderNodeUVMap")
+        uv.uv_map = mesh.uv_layers.active.name
+        adjust = nodes.new("ShaderNodeVectorMath")
+        adjust.operation = 'MULTIPLY_ADD'
+        adjust.inputs[1].default_value = (5.9, -5.9, 1.0)
+        adjust.inputs[2].default_value = (-3.3832, 2.1586, 0.0)
+        texture = nodes.new("ShaderNodeTexImage")
+        texture.image = bpy.data.images.load(str(image_path.resolve()), check_existing=True)
+        texture.extension = 'CLIP'
+        links.new(uv.outputs["UV"], adjust.inputs[0])
+        links.new(adjust.outputs["Vector"], texture.inputs["Vector"])
+        links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
+        threshold = nodes.new("ShaderNodeMath")
+        threshold.operation = 'GREATER_THAN'
+        threshold.inputs[1].default_value = 0.45
+        links.new(texture.outputs["Alpha"], threshold.inputs[0])
+        links.new(threshold.outputs[0], bsdf.inputs["Alpha"])
+        if hasattr(mat, 'surface_render_method'):
+            mat.surface_render_method = 'DITHERED'
+        elif hasattr(mat, 'blend_method'):
+            mat.blend_method = 'CLIP'
+            if hasattr(mat, 'alpha_threshold'):
+                mat.alpha_threshold = 0.45
+        mesh.materials.clear()
+        mesh.materials.append(mat)
+        for obj in lights:
+            obj.data = mesh
+            obj.hide_set(False)
+            obj.hide_render = False
+        bpy.data.objects.remove(temporary[0], do_unlink=True)
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'VIEW_3D':
+                area.spaces.active.shading.type = 'MATERIAL'
+        print(f"ORIGINAL HEADLIGHTS: article=32 instances={len(lights)} "
+              f"vertices={len(mesh.vertices)} triangles={len(mesh.polygons)} "
+              "UV scale=(5.9,-5.9) offset=(-3.3832,2.1586) alpha=0.45")
+        print("ORIGINAL HEADLIGHTS: UV transform and material assignment are experimental.")
 
     if glass_light_audit:
         # Read-only geometry/material survey. Existing batch OBJs generally lack
