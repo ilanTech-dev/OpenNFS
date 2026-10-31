@@ -23,11 +23,14 @@ def main():
     uv_dir, image_dir, destination = (Path(x).expanduser() for x in args[:3])
     parser = argparse.ArgumentParser()
     parser.add_argument("--headlight-uv-scale", type=float, default=1.0)
+    parser.add_argument("--headlight-uv-scale-v", type=float, default=None, help="independent V scale; negative flips V")
     parser.add_argument("--headlight-uv-offset-u", type=float, default=0.0)
     parser.add_argument("--headlight-uv-offset-v", type=float, default=0.0)
     options, _ = parser.parse_known_args(args[3:])
     if not (0.01 <= options.headlight_uv_scale <= 16.0):
         raise SystemExit("--headlight-uv-scale must be between 0.01 and 16")
+    if options.headlight_uv_scale_v is not None and not (0.01 <= abs(options.headlight_uv_scale_v) <= 16.0):
+        raise SystemExit("--headlight-uv-scale-v magnitude must be between 0.01 and 16")
     overrides = {}
     for opt, key in (("--glass", "glass"), ("--headlight", "headlight")):
         if opt in args:
@@ -103,13 +106,14 @@ def main():
         print(f"UV BOUNDS article={article}: U=[{min(u):.6f},{max(u):.6f}] V=[{min(v):.6f},{max(v):.6f}]")
         if article == 32:
             scale = options.headlight_uv_scale
+            scale_v = options.headlight_uv_scale_v if options.headlight_uv_scale_v is not None else scale
             du, dv = options.headlight_uv_offset_u, options.headlight_uv_offset_v
             for loop in obj.data.uv_layers.active.data:
                 loop.uv.x = loop.uv.x * scale + du
-                loop.uv.y = loop.uv.y * scale + dv
-            print(f"UV TRANSFORM article=32: scale={scale} offset=({du},{dv}) "
+                loop.uv.y = loop.uv.y * scale_v + dv
+            print(f"UV TRANSFORM article=32: scale_u={scale} scale_v={scale_v} offset=({du},{dv}) "
                   f"U=[{min(u)*scale+du:.6f},{max(u)*scale+du:.6f}] "
-                  f"V=[{min(v)*scale+dv:.6f},{max(v)*scale+dv:.6f}]")
+                  f"V=[{min(v)*scale_v+dv:.6f},{max(v)*scale_v+dv:.6f}]")
         obj.data.materials.clear()
         obj.data.materials.append(material(f"TEST_{label}", image, transparent))
         print(f"TEXTURE TEST: article={article} vertices={len(obj.data.vertices)} triangles={len(obj.data.polygons)} uv_layers={len(obj.data.uv_layers)} image={image}")
