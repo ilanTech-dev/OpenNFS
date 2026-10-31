@@ -7,11 +7,12 @@ Usage (after --):
     ~/gitHub/project-porsche/textures-png \
     ~/gitHub/project-porsche/glass-light-preview.blend
 
-Optional: --glass FILE --headlight FILE
+Optional: --glass FILE --headlight FILE --headlight-uv-scale 2.0
 Images are diagnostic guesses, not verified CRP material bindings.
 """
 import bpy
 import sys
+import argparse
 from pathlib import Path
 
 
@@ -20,6 +21,13 @@ def main():
     if len(args) < 3:
         raise SystemExit("Usage: blender --python blender_glass_light_preview.py -- UV_DIR PNG_DIR OUTPUT_BLEND [--glass FILE] [--headlight FILE]")
     uv_dir, image_dir, destination = (Path(x).expanduser() for x in args[:3])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--headlight-uv-scale", type=float, default=1.0)
+    parser.add_argument("--headlight-uv-offset-u", type=float, default=0.0)
+    parser.add_argument("--headlight-uv-offset-v", type=float, default=0.0)
+    options, _ = parser.parse_known_args(args[3:])
+    if not (0.01 <= options.headlight_uv_scale <= 16.0):
+        raise SystemExit("--headlight-uv-scale must be between 0.01 and 16")
     overrides = {}
     for opt, key in (("--glass", "glass"), ("--headlight", "headlight")):
         if opt in args:
@@ -44,7 +52,7 @@ def main():
         return matches[0]
 
     glass = choose("glass", ("glas",))
-    head = choose("headlight", ("head", "lit1"))
+    head = choose("headlight", ("lit1",))
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
 
@@ -89,6 +97,19 @@ def main():
         obj.location = location
         if not obj.data.uv_layers:
             raise RuntimeError(f"No UV layer imported for article {article}")
+        coords = [loop.uv for loop in obj.data.uv_layers.active.data]
+        u = [xy.x for xy in coords]
+        v = [xy.y for xy in coords]
+        print(f"UV BOUNDS article={article}: U=[{min(u):.6f},{max(u):.6f}] V=[{min(v):.6f},{max(v):.6f}]")
+        if article == 32:
+            scale = options.headlight_uv_scale
+            du, dv = options.headlight_uv_offset_u, options.headlight_uv_offset_v
+            for loop in obj.data.uv_layers.active.data:
+                loop.uv.x = loop.uv.x * scale + du
+                loop.uv.y = loop.uv.y * scale + dv
+            print(f"UV TRANSFORM article=32: scale={scale} offset=({du},{dv}) "
+                  f"U=[{min(u)*scale+du:.6f},{max(u)*scale+du:.6f}] "
+                  f"V=[{min(v)*scale+dv:.6f},{max(v)*scale+dv:.6f}]")
         obj.data.materials.clear()
         obj.data.materials.append(material(f"TEST_{label}", image, transparent))
         print(f"TEXTURE TEST: article={article} vertices={len(obj.data.vertices)} triangles={len(obj.data.polygons)} uv_layers={len(obj.data.uv_layers)} image={image}")
