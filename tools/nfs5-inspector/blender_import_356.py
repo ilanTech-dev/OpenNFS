@@ -26,6 +26,13 @@ GLASS = {18, 35, 36, 37, 38, 104, 110, 111}
 ALTERNATIVE_ROOFS = {24, 30, 31}
 MIRROR_CANDIDATES = {4, 103, 18, 104, 19, 105}
 WHEEL_CANDIDATES = {22, 23, 106, 107}
+# Paired articles are provisional: original file lists two DoorOut articles
+# and corresponding exterior window, glass and handle variants.
+DOOR_GROUPS = {
+    "A": {4, 18, 19, 36, 37, 43},
+    "B": {103, 104, 105, 110, 111, 112},
+}
+DOOR_ARTICLES = DOOR_GROUPS["A"] | DOOR_GROUPS["B"]
 
 
 def material(name, color, metallic=0, roughness=0.35, alpha=1):
@@ -56,12 +63,25 @@ def main():
                     help="Additional Blender Y offset for article 6; requires --panel-transform-preview")
     ap.add_argument("--panel-transform-preview", action="store_true",
                     help="Apply candidate CRP translation and X=90-degree rotation to articles 3 and 6")
+    ap.add_argument("--door-preview", action="store_true",
+                    help="Display both candidate door/window sets with their CRP transforms")
+    ap.add_argument("--door-a-y-offset", type=float, default=0.0,
+                    help="Additional Blender Y translation for door group A")
+    ap.add_argument("--door-b-y-offset", type=float, default=0.0,
+                    help="Additional Blender Y translation for door group B")
+    ap.add_argument("--door-a-x-offset", type=float, default=0.0,
+                    help="Additional Blender X translation for door group A")
+    ap.add_argument("--door-b-x-offset", type=float, default=0.0,
+                    help="Additional Blender X translation for door group B")
     ap.add_argument("--all-visible", action="store_true",
                     help="Diagnostic mode: show every imported mesh, including alternatives")
     options = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = ap.parse_args(options)
     if not args.panel_transform_preview and (args.bonnet_y_offset != 1.21 or args.decklid_y_offset != -2.23):
         ap.error("Y offsets require --panel-transform-preview")
+    if not args.door_preview and any((args.door_a_y_offset, args.door_b_y_offset,
+                                      args.door_a_x_offset, args.door_b_x_offset)):
+        ap.error("Door offsets require --door-preview")
     batch = args.batch.expanduser().resolve()
     meta_path = args.metadata.expanduser().resolve()
     manifest = batch / "manifest.csv"
@@ -128,10 +148,29 @@ def main():
                               f"rotation_X=90deg Y_offset={y_offset:+.4f}")
                     else:
                         print(f"356 PANEL PREVIEW: {index} has no metadata transform; unchanged")
+                if args.door_preview and index in DOOR_ARTICLES:
+                    group = "A" if index in DOOR_GROUPS["A"] else "B"
+                    delta_x = args.door_a_x_offset if group == "A" else args.door_b_x_offset
+                    delta_y = args.door_a_y_offset if group == "A" else args.door_b_y_offset
+                    if info.get("has_transform") == "1":
+                        tx, ty, tz = (float(info[k]) for k in ("tx", "ty", "tz"))
+                        obj.location = (tx + delta_x, tz + delta_y, ty)
+                        obj.rotation_euler = (math.pi / 2, 0, 0)
+                        obj["placement_status"] = "EXPERIMENTAL door CRP transform; compare mesh fit"
+                        print(f"356 DOOR: group={group} article={index} "
+                              f"CRP=({tx:.4f}, {ty:.4f}, {tz:.4f}) "
+                              f"Blender={tuple(round(v, 4) for v in obj.location)} "
+                              f"offset_XY=({delta_x:+.3f}, {delta_y:+.3f})")
+                    else:
+                        # No reliable world placement inferred from article name.
+                        obj.location.x += delta_x
+                        obj.location.y += delta_y
+                        print(f"356 DOOR: group={group} article={index} has no CRP transform; "
+                              "only user offsets applied")
                 # Transform metadata is recorded, not blindly applied. Some
                 # CRP mesh buffers already encode world positions and others
                 # are local panel geometry; only a mesh-by-mesh review can tell.
-                display = args.all_visible or index in VISIBLE
+                display = args.all_visible or index in VISIBLE or (args.door_preview and index in DOOR_ARTICLES)
                 obj.hide_set(not display)
                 obj.hide_render = not display
                 if index in GLASS:
@@ -161,6 +200,9 @@ def main():
             area.spaces.active.shading.type = "MATERIAL"
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
+    if args.door_preview:
+        print("356 DOOR PREVIEW: candidates A=4/18/19/36/37/43 B=103/104/105/110/111/112; "
+              "transforms provisional; compare both sides in Blender")
     if args.panel_transform_preview:
         print("356 PANEL PREVIEW: hypotheses only; compare against untransformed saved .blend")
     print(f"356 FIRST PASS: hidden roof alternatives: {sorted(ALTERNATIVE_ROOFS)}")
