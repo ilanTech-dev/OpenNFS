@@ -16,6 +16,8 @@ def main():
     parser.add_argument("uv_dir", type=Path)
     parser.add_argument("png_dir", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--auto-fit", action="store_true", help="fit each article UV island independently to 0..1")
+    parser.add_argument("--flip-v", action="store_true", help="flip V in auto-fit mode")
     parser.add_argument("--scale-u", type=float, default=1.0)
     parser.add_argument("--scale-v", type=float, default=1.0)
     parser.add_argument("--offset-u", type=float, default=0.0)
@@ -46,6 +48,20 @@ def main():
         uv = [(loop.uv.x, loop.uv.y) for loop in layer.data]
         print(f"REAR LIGHT UV article={article} raw U={min(x for x,y in uv):.6f}..{max(x for x,y in uv):.6f} "
               f"V={min(y for x,y in uv):.6f}..{max(y for x,y in uv):.6f}")
+        if options.auto_fit:
+            u_min, u_max = min(x for x,y in uv), max(x for x,y in uv)
+            v_min, v_max = min(y for x,y in uv), max(y for x,y in uv)
+            if u_max - u_min < 1e-8 or v_max - v_min < 1e-8:
+                raise RuntimeError(f"Article {article} has degenerate UV bounds")
+            su = 1.0 / (u_max - u_min)
+            sv = (-1.0 if options.flip_v else 1.0) / (v_max - v_min)
+            du = -u_min * su
+            dv = (1.0 - v_min * sv) if options.flip_v else -v_min * sv
+        else:
+            su, sv = options.scale_u, options.scale_v
+            du, dv = options.offset_u, options.offset_v
+        print(f"REAR LIGHT TRANSFORM article={article} scale=({su:.6f},{sv:.6f}) "
+              f"offset=({du:.6f},{dv:.6f}) auto_fit={options.auto_fit} flip_v={options.flip_v}")
         mat = bpy.data.materials.new(f"REAR_LIGHT_{article}_MATERIAL_TEST")
         mat.use_nodes = True
         nodes, links = mat.node_tree.nodes, mat.node_tree.links
@@ -55,8 +71,8 @@ def main():
         tex.extension = "CLIP"
         mapping = nodes.new("ShaderNodeVectorMath")
         mapping.operation = "MULTIPLY_ADD"
-        mapping.inputs[1].default_value = (options.scale_u, options.scale_v, 1.0)
-        mapping.inputs[2].default_value = (options.offset_u, options.offset_v, 0.0)
+        mapping.inputs[1].default_value = (su, sv, 1.0)
+        mapping.inputs[2].default_value = (du, dv, 0.0)
         uv_node = nodes.new("ShaderNodeUVMap")
         uv_node.uv_map = layer.name
         links.new(uv_node.outputs["UV"], mapping.inputs[0])
@@ -74,7 +90,7 @@ def main():
         obj.data.materials.clear()
         obj.data.materials.append(mat)
         print(f"REAR LIGHT TEST article={article} polygons={len(obj.data.polygons)} image={filename} "
-              f"scale=({options.scale_u},{options.scale_v}) offset=({options.offset_u},{options.offset_v})")
+              f"scale=({su:.6f},{sv:.6f}) offset=({du:.6f},{dv:.6f})")
     output = options.output.expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=str(output.resolve()))
