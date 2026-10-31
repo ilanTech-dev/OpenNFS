@@ -1307,6 +1307,61 @@ void inspectBodyNormalAlignment(const Bytes& b) {
 
 
 
+
+void inspectMaterialRecordComparison(const Bytes& b) {
+    const std::size_t n=read32le(b,4)>>5,dir=std::size_t(read32le(b,12))*16;
+    if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("invalid article directory");
+    const std::array<std::size_t,10> selected{{32,17,18,15,23,12,36,5,46,56}};
+    struct Record {std::size_t article;std::string name;std::vector<std::uint8_t> data;};
+    std::vector<Record> records;
+    for(auto article:selected) {
+        if(article>=n)continue;
+        const auto at=dir+article*16,rel=std::size_t(read32le(b,at+12)),len=std::size_t(read32le(b,at+8));
+        if(rel>(b.size()-at)/16)throw std::runtime_error("bad article offset");
+        const auto begin=at+rel*16;
+        if(len>(b.size()-begin)/16)throw std::runtime_error("bad article descriptors");
+        for(std::size_t i=0;i<len;++i){
+            const auto p=begin+i*16;
+            if(b[p+2]!='a'||b[p+3]!='B')continue;
+            const auto bytes=std::size_t(read32le(b,p+4)>>8),off=std::size_t(read32le(b,p+12));
+            if(off>b.size()-p||bytes>b.size()-p-off)throw std::runtime_error("bad aB payload");
+            records.push_back({article,articleName(b,article),{b.begin()+std::ptrdiff_t(p+off),b.begin()+std::ptrdiff_t(p+off+bytes)}});
+        }
+    }
+    std::cout<<"AB RECORD COMPARISON: offsets are relative to aB payload, not descriptor\\n";
+    for(const auto& rec:records){
+        std::cout<<"  article="<<rec.article<<" name="<<rec.name<<" bytes="<<rec.data.size()<<"\n";
+        for(std::size_t offset=0;offset<rec.data.size();offset+=16){
+            std::cout<<"    +0x"<<std::hex<<std::setw(3)<<std::setfill('0')<<offset<<std::dec<<std::setfill(' ')<<" ";
+            for(std::size_t j=0;j<16;++j) {
+                if(offset+j<rec.data.size())
+                    std::cout<<std::hex<<std::setw(2)<<std::setfill('0')<<unsigned(rec.data[offset+j])<<" ";
+                else std::cout<<"   ";
+            }
+            std::cout<<std::dec<<std::setfill(' ')<<"\n";
+        }
+    }
+    std::cout<<"AB BYTE COMPARISON: rows with differing values (missing bytes shown as --)\\n";
+    std::size_t maxLength=0;
+    for(const auto& rec:records)maxLength=std::max(maxLength,rec.data.size());
+    for(std::size_t pos=0;pos<maxLength;++pos){
+        bool differing=false;
+        for(std::size_t i=1;i<records.size();++i){
+            if(pos>=records[0].data.size()||pos>=records[i].data.size()||
+               records[0].data[pos]!=records[i].data[pos]){differing=true;break;}
+        }
+        if(!differing)continue;
+        std::cout<<"  +0x"<<std::hex<<std::setw(3)<<std::setfill('0')<<pos<<std::dec<<std::setfill(' ')<<":";
+        for(const auto& rec:records){
+            std::cout<<" "<<rec.article<<"=";
+            if(pos<rec.data.size())std::cout<<std::hex<<std::setw(2)<<std::setfill('0')<<unsigned(rec.data[pos])<<std::dec<<std::setfill(' ');
+            else std::cout<<"--";
+        }
+        std::cout<<"\n";
+    }
+    std::cout<<"NOTE: byte differences are observations; no semantic mapping has been inferred.\\n";
+}
+
 void inspectMaterialCandidateDistribution(const Bytes& b) {
     const std::size_t n=read32le(b,4)>>5,dir=std::size_t(read32le(b,12))*16;
     if(dir>b.size()||n>(b.size()-dir)/16)throw std::runtime_error("invalid article directory");
@@ -2086,8 +2141,8 @@ int main(int argc, char* argv[]) {
         std::cout << (ok ? "Self-tests passed\n" : "Self-tests FAILED\n");
         return ok ? 0 : 1;
     }
-    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || std::string(argv[2]) == "--article-uv-mesh" || (std::string(argv[2]) == "--article-normal-mesh" || std::string(argv[2]) == "--article-normal-mesh-reversed"))) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--body-normal-alignment" || std::string(argv[2]) == "--glass-light-uv" || std::string(argv[2]) == "--glass-light-material-refs" || std::string(argv[2]) == "--material-candidate-distribution" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
-        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --article-uv-mesh <17|18|32|36> <new-obj-file> | --article-normal-mesh <index> <new-obj-file> | --article-normal-mesh-reversed <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --body-normal-alignment | --glass-light-uv | --glass-light-material-refs | --material-candidate-distribution | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
+    if (argc != 2 && !(argc == 5 && (std::string(argv[2]) == "--article-mesh" || std::string(argv[2]) == "--wheel-uv-mesh" || std::string(argv[2]) == "--article-uv-mesh" || (std::string(argv[2]) == "--article-normal-mesh" || std::string(argv[2]) == "--article-normal-mesh-reversed"))) && !(argc == 3 && (std::string(argv[2]) == "--parts" || std::string(argv[2]) == "--wheel-placement" || std::string(argv[2]) == "--component-metadata" || std::string(argv[2]) == "--surface-descriptors" || std::string(argv[2]) == "--triangle-attribute-samples" || std::string(argv[2]) == "--attribute-layout" || std::string(argv[2]) == "--wheel-reference-map" || std::string(argv[2]) == "--wheel-stream-samples" || std::string(argv[2]) == "--wheel-index-streams" || std::string(argv[2]) == "--crp-textures" || std::string(argv[2]) == "--body-normal-alignment" || std::string(argv[2]) == "--glass-light-uv" || std::string(argv[2]) == "--glass-light-material-refs" || std::string(argv[2]) == "--material-candidate-distribution" || std::string(argv[2]) == "--material-record-comparison" || std::string(argv[2]) == "--rear-lid-compare" || std::string(argv[2]) == "--rear-mesh-groups" || std::string(argv[2]) == "--spoiler-mesh-groups" || std::string(argv[2]) == "--spoiler-topology" || std::string(argv[2]) == "--panel-animation-records")) && !(argc == 4 && (std::string(argv[2]) == "--extract-fsh" || std::string(argv[2]) == "--assembly-metadata" || std::string(argv[2]) == "--transforms" || std::string(argv[2]) == "--batch-mesh" || std::string(argv[2]) == "--body-mesh" || std::string(argv[2]) == "--polygons" || std::string(argv[2]) == "--dump" || std::string(argv[2]) == "--vertices" || std::string(argv[2]) == "--vertices-level0")) ) {
+        std::cerr << "Usage: nfs5-inspector <path-to-crp> [--dump <new-output-file> | --vertices <new-obj-file> | --vertices-level0 <new-obj-file> | --body-mesh <new-obj-file> | --article-mesh <index> <new-obj-file> | --wheel-uv-mesh <46|47> <new-obj-file> | --article-uv-mesh <17|18|32|36> <new-obj-file> | --article-normal-mesh <index> <new-obj-file> | --article-normal-mesh-reversed <index> <new-obj-file> | --batch-mesh <new-directory> | --assembly-metadata <new-csv-file> | --wheel-placement | --component-metadata | --surface-descriptors | --triangle-attribute-samples | --attribute-layout | --wheel-reference-map | --wheel-stream-samples | --wheel-index-streams | --crp-textures | --body-normal-alignment | --glass-light-uv | --glass-light-material-refs | --material-candidate-distribution | --material-record-comparison | --extract-fsh <new-directory> | --rear-lid-compare | --rear-mesh-groups | --spoiler-mesh-groups | --spoiler-topology | --panel-animation-records | --transforms <article-index> | --polygons <article-index>] | --self-test\n";
         return 2;
     }
     try {
@@ -2120,6 +2175,7 @@ int main(int argc, char* argv[]) {
         if (argc == 3 && std::string(argv[2]) == "--glass-light-uv") inspectGlassLightUv(output);
         if (argc == 3 && std::string(argv[2]) == "--glass-light-material-refs") inspectGlassLightMaterialRefs(output);
         if (argc == 3 && std::string(argv[2]) == "--material-candidate-distribution") inspectMaterialCandidateDistribution(output);
+        if (argc == 3 && std::string(argv[2]) == "--material-record-comparison") inspectMaterialRecordComparison(output);
         if (argc == 4 && std::string(argv[2]) == "--extract-fsh") exportEmbeddedFsh(output, std::filesystem::path(argv[3]));
         if (argc == 3 && std::string(argv[2]) == "--rear-lid-compare") compareRearLids(output);
         if (argc == 3 && std::string(argv[2]) == "--rear-mesh-groups") inspectRearMeshGroups(output);
