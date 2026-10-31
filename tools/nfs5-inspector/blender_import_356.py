@@ -13,6 +13,7 @@ import argparse
 import csv
 from pathlib import Path
 import sys
+import math
 
 import bpy
 
@@ -49,6 +50,8 @@ def main():
     ap.add_argument("batch", type=Path)
     ap.add_argument("metadata", type=Path)
     ap.add_argument("--save-blend", type=Path)
+    ap.add_argument("--panel-transform-preview", action="store_true",
+                    help="Apply candidate CRP translation and X=90-degree rotation to articles 3 and 6")
     ap.add_argument("--all-visible", action="store_true",
                     help="Diagnostic mode: show every imported mesh, including alternatives")
     options = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -106,6 +109,18 @@ def main():
                     obj["crp_original_translation_xyz"] = [
                         float(info[k]) for k in ("tx", "ty", "tz")
                     ]
+                if args.panel_transform_preview and index in (3, 6):
+                    if info.get("has_transform") == "1":
+                        tx, ty, tz = (float(info[k]) for k in ("tx", "ty", "tz"))
+                        obj.location = (tx, tz, ty)
+                        obj.rotation_euler = (math.pi / 2, 0.0, 0.0)
+                        obj["placement_status"] = "EXPERIMENTAL CRP translation + X90 rotation"
+                        print(f"356 PANEL PREVIEW: {index} {row['name']} "
+                              f"translation_CR P=({tx:.4f},{ty:.4f},{tz:.4f}) "
+                              f"Blender_location={tuple(round(v, 4) for v in obj.location)} "
+                              "rotation_X=90deg")
+                    else:
+                        print(f"356 PANEL PREVIEW: {index} has no metadata transform; unchanged")
                 # Transform metadata is recorded, not blindly applied. Some
                 # CRP mesh buffers already encode world positions and others
                 # are local panel geometry; only a mesh-by-mesh review can tell.
@@ -139,6 +154,8 @@ def main():
             area.spaces.active.shading.type = "MATERIAL"
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
+    if args.panel_transform_preview:
+        print("356 PANEL PREVIEW: hypotheses only; compare against untransformed saved .blend")
     print(f"356 FIRST PASS: hidden roof alternatives: {sorted(ALTERNATIVE_ROOFS)}")
     print(f"356 FIRST PASS: hidden door candidates: {sorted(MIRROR_CANDIDATES)}")
     print(f"356 FIRST PASS: hidden wheels pending axle placement: {sorted(WHEEL_CANDIDATES)}")
