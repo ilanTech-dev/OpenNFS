@@ -23,7 +23,7 @@ def main():
     argv = sys.argv
     args = argv[argv.index("--") + 1:] if "--" in argv else []
     if not args:
-        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--glass-light-audit] [--glass-preview 36|71|72|73|74|76|156|166] [--original-body-normals <normal-obj-file>] [--reversed-normal-parts <obj-directory>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--original-headlights <png-directory> <uv-obj-directory>] [--original-rearlights <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
+        raise SystemExit("Usage: blender --python blender_import_batch.py -- <batch-directory> [metadata.csv] [--rear-preset carrera|turbo-s|clubsport] [--lid-type 0|1|2] [--spoiler down|up] [--spoiler-compare] [--spoiler-groups-preview] [--material-preview] [--glass-light-audit] [--targa-showcase] [--save-blend <output.blend>] [--glass-preview 36|71|72|73|74|76|156|166] [--original-body-normals <normal-obj-file>] [--reversed-normal-parts <obj-directory>] [--wheel-geometry-diagnostic] [--wheel-group-diagnostic] [--wheel-alpha-test] [--original-wheel-textures <png-directory> <uv-obj-directory>] [--original-headlights <png-directory> <uv-obj-directory>] [--original-rearlights <png-directory> <uv-obj-directory>] [--animate-spoiler-mechanism] [--animate-spoiler] [--animate-spoiler-smooth] [--lid-underside-compare] [--rear-lid-hinge] [--animate-rear-lid] [--both-doors] [--bonnet-hinge]")
     lid_choices = {"0": 6, "1": 39, "2": 4}
     spoiler_choices = {"down": 52, "up": 53}
     def take_option(name, choices):
@@ -73,6 +73,16 @@ def main():
         if idx + 1 >= len(args) or args[idx + 1] not in valid:
             raise SystemExit("--glass-preview requires an article: " + ", ".join(sorted(valid)))
         glass_preview_article = int(args[idx + 1])
+        del args[idx:idx + 2]
+    targa_showcase = "--targa-showcase" in args
+    if targa_showcase:
+        args.remove("--targa-showcase")
+    save_blend_path = None
+    if "--save-blend" in args:
+        idx = args.index("--save-blend")
+        if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+            raise SystemExit("--save-blend needs an output .blend path")
+        save_blend_path = Path(args[idx + 1]).expanduser()
         del args[idx:idx + 2]
     wheel_texture_paths = None
     if "--original-wheel-textures" in args:
@@ -1370,6 +1380,46 @@ def main():
         print("GLASS PREVIEW: single article enabled, procedural alpha only; "
               "windscreen/rear-window identity and texture mapping remain unverified.")
 
+    if targa_showcase:
+        # Visually identified NFS5 993 Targa pairing: Roof1=20, rear/quarter
+        # glazing=72, retractable glass roof=73, front windscreen=71.
+        # Do not show alternate coupe roof 27/glass 74 or Cabriolet pieces.
+        glass_articles = {71, 72, 73}
+        alternatives = {24, 27, 74, 43, 50, 51}
+        for obj in collection.objects:
+            if obj.type != 'MESH':
+                continue
+            article = obj.get("crp_article")
+            if article in alternatives:
+                obj.hide_set(True)
+                obj.hide_render = True
+            elif article in glass_articles or article == 20:
+                obj.hide_set(False)
+                obj.hide_render = False
+        glass_mat = bpy.data.materials.new("NFS5_Targa_smoked_glass_showcase")
+        glass_mat.use_nodes = True
+        glass_mat.diffuse_color = (0.06, 0.13, 0.17, 0.48)
+        shader = glass_mat.node_tree.nodes.get("Principled BSDF")
+        shader.inputs["Base Color"].default_value = (0.06, 0.13, 0.17, 1)
+        shader.inputs["Roughness"].default_value = 0.14
+        shader.inputs["Alpha"].default_value = 0.45
+        if "Transmission Weight" in shader.inputs:
+            shader.inputs["Transmission Weight"].default_value = 0.25
+        if hasattr(glass_mat, "surface_render_method"):
+            glass_mat.surface_render_method = "DITHERED"
+        elif hasattr(glass_mat, "blend_method"):
+            glass_mat.blend_method = "BLEND"
+        for obj in collection.objects:
+            if obj.type == 'MESH' and obj.get("crp_article") in glass_articles:
+                obj.data = obj.data.copy()
+                obj.data.materials.clear()
+                obj.data.materials.append(glass_mat)
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'VIEW_3D':
+                area.spaces.active.shading.type = 'MATERIAL'
+        print("TARGA SHOWCASE: roof=20, front glass=71, rear/quarter glass=72, sliding roof glass=73.")
+        print("TARGA SHOWCASE: coupe and cabrio roof variants hidden; procedural tinted glass (original texture mapping unverified).")
+
     if glass_light_audit:
         # Read-only geometry/material survey. Existing batch OBJs generally lack
         # UVs; do not pretend the extracted texture can be mapped correctly.
@@ -1395,6 +1445,11 @@ def main():
             found += 1
         print(f"GLASS LIGHT AUDIT: listed {found} candidate objects. "
               "No material assignments changed. No UVs are invented.")
+
+    if save_blend_path is not None:
+        save_blend_path.parent.mkdir(parents=True, exist_ok=True)
+        bpy.ops.wm.save_as_mainfile(filepath=str(save_blend_path.resolve()))
+        print(f"SAVED PORSCHE BLEND: {save_blend_path.resolve()}")
 
     print(f"NFS5 assembly: imported {imported} articles, missing {missing} files")
     print("Wheels: 46=front, 47=rear; original meshes with exchanged longitudinal CRP positions; mirrored opposite sides (provisional)")
