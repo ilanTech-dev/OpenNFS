@@ -65,9 +65,9 @@ def main():
                     help="Apply candidate CRP translation and X=90-degree rotation to articles 3 and 6")
     ap.add_argument("--door-preview", action="store_true",
                     help="Display both candidate door/window sets with their CRP transforms")
-    ap.add_argument("--door-a-y-offset", type=float, default=1.479,
+    ap.add_argument("--door-a-y-offset", type=float, default=1.47,
                     help="Additional Blender Y translation for door group A")
-    ap.add_argument("--door-b-y-offset", type=float, default=1.479,
+    ap.add_argument("--door-b-y-offset", type=float, default=1.47,
                     help="Additional Blender Y translation for door group B")
     ap.add_argument("--door-a-x-offset", type=float, default=0.0,
                     help="Additional Blender X translation for door group A")
