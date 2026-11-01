@@ -75,6 +75,8 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-tire-geometry-audit", action="store_true",
+                    help="Color and log wheel UV regions with geometric local bounding boxes; no faces hidden")
     ap.add_argument("--wheel-strip-transparent", action="store_true",
                     help="Experimental: make the non-circular wheel UV region fully transparent")
     ap.add_argument("--wheel-face-only", action="store_true",
@@ -110,6 +112,10 @@ def main():
         ap.error("Wheel UV/textures require --wheel-preview")
     if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
         ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
+    if args.wheel_tire_geometry_audit and (not args.wheel_preview or not args.wheel_uv_directory):
+        ap.error("--wheel-tire-geometry-audit requires --wheel-preview and --wheel-uv-directory")
+    if args.wheel_tire_geometry_audit and (args.wheel_face_only or args.wheel_uv_regions or args.wheel_strip_transparent):
+        ap.error("--wheel-tire-geometry-audit cannot be combined with other wheel region modes")
     if args.wheel_strip_transparent and not args.wheel_face_only:
         ap.error("--wheel-strip-transparent requires --wheel-face-only")
     if args.wheel_face_only and args.wheel_uv_regions:
@@ -174,7 +180,7 @@ def main():
         material("356 WHEEL UV REGION: circular candidate — cyan", (0.015, 0.7, 0.9), roughness=0.8),
         material("356 WHEEL UV REGION: upper strip — magenta", (0.95, 0.04, 0.5), roughness=0.8),
         material("356 WHEEL UV REGION: crossing threshold — yellow", (0.95, 0.8, 0.02), roughness=0.8),
-    ) if args.wheel_uv_regions else None
+    ) if (args.wheel_uv_regions or args.wheel_tire_geometry_audit) else None
     wheel_strip_invisible = None
     if args.wheel_strip_transparent:
         wheel_strip_invisible = material(
@@ -311,7 +317,7 @@ def main():
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
                 obj.hide_render = not display
-                if index in WHEEL_CANDIDATES and (args.wheel_uv_regions or args.wheel_face_only):
+                if index in WHEEL_CANDIDATES and (args.wheel_uv_regions or args.wheel_face_only or args.wheel_tire_geometry_audit):
                     mesh = obj.data
                     if not mesh.uv_layers:
                         raise RuntimeError(f"Wheel article {index}: no UV layer in {source}")
@@ -336,6 +342,19 @@ def main():
                             group = 2
                         polygon.material_index = group
                         totals[group] += 1
+                    if args.wheel_tire_geometry_audit:
+                        for group in range(3):
+                            vertices = {vertex for polygon in mesh.polygons
+                                        if polygon.material_index == group
+                                        for vertex in polygon.vertices}
+                            if not vertices:
+                                continue
+                            extrema = [(round(min(mesh.vertices[k].co[axis] for k in vertices), 5),
+                                        round(max(mesh.vertices[k].co[axis] for k in vertices), 5))
+                                       for axis in range(3)]
+                            print(f"356 WHEEL GEOMETRY: article={index} region={group} "
+                                  f"faces={totals[group]} verts={len(vertices)} "
+                                  f"local_XYZ_ranges={extrema}")
                     print(f"356 WHEEL UV {'FACE-ONLY' if args.wheel_face_only else 'REGIONS'}: article={index} total={len(mesh.polygons)} "
                           f"circular={totals[0]} strip={totals[1]} crossing={totals[2]} "
                           f"threshold_V={args.wheel_uv_region_v:.3f}")
@@ -373,6 +392,8 @@ def main():
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
     if args.wheel_strip_transparent:
         print("356 WHEEL STRIP: debug-only transparency on UV strip/crossing faces; original mesh untouched")
+    if args.wheel_tire_geometry_audit:
+        print("356 WHEEL GEOMETRY: cyan=circular UV region, magenta=strip, yellow=crossing; nothing hidden")
     if args.wheel_face_only:
         print("356 WHEEL FACE-ONLY: circular UV candidates use wheel artwork; other faces use provisional dark material")
     if args.wheel_uv_regions:
