@@ -66,6 +66,12 @@ def main():
                     help="Comma-separated extra article IDs to display individually: 10,11,12,26,29,73; complements --exterior-detail-preview")
     ap.add_argument("--panel-decal-preview", action="store_true",
                     help="Test bonnet/decklid panel transforms on decal articles 10/12")
+    ap.add_argument("--wiper-align-preview", action="store_true",
+                    help="Separate article 26 into left/right vertex groups and adjust each wiper angle")
+    ap.add_argument("--wiper-left-angle", type=float, default=0.0,
+                    help="Left-side wiper rotation in degrees about local Z, around its group centre")
+    ap.add_argument("--wiper-right-angle", type=float, default=0.0,
+                    help="Right-side wiper rotation in degrees about local Z, around its group centre")
     ap.add_argument("--trim-audit", action="store_true",
                     help="Print world-space bounding boxes of body-adjacent trim candidates")
     ap.add_argument("--exterior-detail-preview", action="store_true",
@@ -218,6 +224,8 @@ def main():
         args.rear_wheel_x_offset, args.rear_wheel_y_offset, args.rear_wheel_z_offset
     )):
         ap.error("Wheel offsets require --wheel-preview")
+    if (args.wiper_left_angle or args.wiper_right_angle) and not args.wiper_align_preview:
+        ap.error("Wiper angle overrides require --wiper-align-preview")
     try:
         selected_trim = set(int(v.strip()) for v in args.trim_articles.split(",") if v.strip())
     except ValueError:
@@ -555,6 +563,7 @@ def main():
                            (args.exterior_detail_preview and index in DETAIL_ARTICLES) or
                            index in selected_trim or
                            (args.panel_decal_preview and index in (10, 12)) or
+                           (args.wiper_align_preview and index == 26) or
                            (args.door_preview and index in DOOR_ARTICLES) or
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
@@ -707,6 +716,53 @@ def main():
                         bm.free()
                     obj["wheel_backing_cleanup"] = "Removed original polygons 112 and 113 in Blender only"
                     print(f"356 WHEEL CLEANUP: article={index} removed=112,113 remaining={len(mesh.polygons)}")
+                if args.wiper_align_preview and index == 26:
+                    # The article may contain several disconnected islands per
+                    # arm. Partition whole connected face islands by their mean
+                    # X position so no shared edges are split between arms.
+                    mesh = obj.data
+                    adjacency = {vertex.index: set() for vertex in mesh.vertices}
+                    for edge in mesh.edges:
+                        a, b = edge.vertices
+                        adjacency[a].add(b)
+                        adjacency[b].add(a)
+                    remaining = set(adjacency)
+                    islands = []
+                    while remaining:
+                        seed = remaining.pop()
+                        component = {seed}
+                        stack = [seed]
+                        while stack:
+                            for neighbour in adjacency[stack.pop()]:
+                                if neighbour in remaining:
+                                    remaining.remove(neighbour)
+                                    component.add(neighbour)
+                                    stack.append(neighbour)
+                        islands.append(component)
+                    if not islands:
+                        raise RuntimeError("356 wiper article 26 has no vertices")
+                    midpoint = (min(v.co.x for v in mesh.vertices) +
+                                max(v.co.x for v in mesh.vertices)) * 0.5
+                    groups = {"left": set(), "right": set()}
+                    for component in islands:
+                        mean_x = sum(mesh.vertices[k].co.x for k in component) / len(component)
+                        groups["left" if mean_x < midpoint else "right"].update(component)
+                    if not all(groups.values()):
+                        raise RuntimeError("356 wiper cannot be separated into two lateral groups")
+                    for side, angle in (("left", args.wiper_left_angle),
+                                        ("right", args.wiper_right_angle)):
+                        vertices = [mesh.vertices[k] for k in groups[side]]
+                        pivot_x = sum(v.co.x for v in vertices) / len(vertices)
+                        pivot_y = sum(v.co.y for v in vertices) / len(vertices)
+                        cs, sn = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+                        for vertex in vertices:
+                            dx, dy = vertex.co.x - pivot_x, vertex.co.y - pivot_y
+                            vertex.co.x = pivot_x + cs * dx - sn * dy
+                            vertex.co.y = pivot_y + sn * dx + cs * dy
+                        print(f"356 WIPER ALIGN: side={side} vertex_count={len(vertices)} "
+                              f"pivot_local_XY=({pivot_x:.5f},{pivot_y:.5f}) angle={angle:+.1f}deg")
+                    mesh.update()
+                    obj["wiper_alignment"] = "EXPERIMENTAL around island-group centroids; pivots not verified"
                 if args.trim_audit and index in (10, 11, 12, 15, 16, 19, 26, 29, 73, 105):
                     from mathutils import Vector
                     # Evaluating the world transform captures door parenting and
@@ -739,6 +795,8 @@ def main():
         print("356 BACKING TEXTURE: testing alpha-clipped original backing faces; OBJ unchanged")
     if args.wheel_remove_backing:
         print("356 WHEEL CLEANUP: only verified square backing triangles removed in Blender; source OBJ untouched")
+    if args.wiper_align_preview:
+        print("356 WIPER ALIGN: grouped by disconnected mesh islands and local X; rotation pivots provisional")
     if args.panel_decal_preview:
         print("356 PANEL DECAL: panel transform applied to articles 10/12 as test; verify fit")
     if selected_trim:
