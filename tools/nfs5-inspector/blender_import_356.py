@@ -73,6 +73,8 @@ def main():
                     help="Additional Blender X translation for door group A")
     ap.add_argument("--door-b-x-offset", type=float, default=0.0,
                     help="Additional Blender X translation for door group B")
+    ap.add_argument("--wheel-swap-axle-y", action="store_true",
+                    help="Exchange longitudinal CRP translations for paired wheel articles 22/23 and 106/107; requires --wheel-preview")
     ap.add_argument("--wheel-preview", action="store_true",
                     help="Show original 356 wheel articles at CRP metadata translations; no mirroring")
     ap.add_argument("--front-wheel-x-offset", type=float, default=0.0)
@@ -90,6 +92,8 @@ def main():
     if not args.door_preview and any((args.door_a_y_offset, args.door_b_y_offset,
                                       args.door_a_x_offset, args.door_b_x_offset)):
         ap.error("Door offsets require --door-preview")
+    if args.wheel_swap_axle_y and not args.wheel_preview:
+        ap.error("--wheel-swap-axle-y requires --wheel-preview")
     if not args.wheel_preview and any((
         args.front_wheel_x_offset, args.front_wheel_y_offset, args.front_wheel_z_offset,
         args.rear_wheel_x_offset, args.rear_wheel_y_offset, args.rear_wheel_z_offset
@@ -102,6 +106,10 @@ def main():
         ap.error("Manifest or assembly metadata missing. Run --batch-mesh and --assembly-metadata first.")
     with meta_path.open(newline="") as handle:
         metadata = {int(r["article"]): r for r in csv.DictReader(handle)}
+
+    # Keep each wheel's own X/Z placement, but optionally borrow the longitudinal
+    # translation of the opposite-axle partner (matching article pair, not mesh).
+    opposite_wheel = {22: 23, 23: 22, 106: 107, 107: 106}
 
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
@@ -190,7 +198,15 @@ def main():
                     )
                     if info.get("has_transform") == "1":
                         tx, ty, tz = (float(info[k]) for k in ("tx", "ty", "tz"))
-                        obj.location = (tx + delta[0], tz + delta[1], ty + delta[2])
+                        source_tz = tz
+                        if args.wheel_swap_axle_y:
+                            partner = metadata.get(opposite_wheel[index], {})
+                            if partner.get("has_transform") == "1":
+                                source_tz = float(partner["tz"])
+                            else:
+                                print(f"356 WHEEL WARNING: partner {opposite_wheel[index]} lacks transform; "
+                                      f"article {index} retains its own Y")
+                        obj.location = (tx + delta[0], source_tz + delta[1], ty + delta[2])
                         obj["placement_status"] = "EXPERIMENTAL CRP wheel translation; orientation unverified"
                     else:
                         obj.location = delta
@@ -235,6 +251,7 @@ def main():
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
     if args.wheel_preview:
+        print(f"356 WHEEL PREVIEW: longitudinal axle swap {'ON' if args.wheel_swap_axle_y else 'OFF'}")
         print("356 WHEEL PREVIEW: 22/106 front and 23/107 rear are independently "
               "positioned from CRP metadata when present; no assumed left/right mirroring")
     if args.door_preview:
