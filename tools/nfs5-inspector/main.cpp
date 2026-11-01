@@ -411,7 +411,7 @@ void exportBodyMesh(const Bytes& b, const std::filesystem::path& dest) {
 
 void exportArticleMesh(const Bytes& b, std::size_t article, const std::filesystem::path& dest, bool uvMode=false, bool normalMode=false, bool reverseWinding=false, bool strictUv=false) {
     if(uvMode && !strictUv && article!=46 && article!=47 && article!=22 && article!=23 && article!=106 && article!=107)throw std::runtime_error("wheel UV export supports 993 articles 46/47 and 356_1 articles 22/23/106/107");
-    if(strictUv && article!=36 && article!=32 && article!=17 && article!=18)throw std::runtime_error("article UV preview supports 36, 32, 17, 18 only");
+    if(strictUv && article!=36 && article!=32 && article!=17 && article!=18 && article!=8 && article!=9 && article!=21)throw std::runtime_error("article UV preview supports 993 articles 36/32/17/18 and 356_1 articles 8/9/21");
     if (std::filesystem::exists(dest)) throw std::runtime_error("OBJ already exists");
     const std::size_t n = read32le(b,4)>>5, dir = std::size_t(read32le(b,12))*16;
     if (dir > b.size() || n > (b.size()-dir)/16 || article >= n)
