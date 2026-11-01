@@ -79,6 +79,12 @@ def main():
                     help="Color and log wheel UV regions with geometric local bounding boxes; no faces hidden")
     ap.add_argument("--wheel-strip-transparent", action="store_true",
                     help="Experimental: make the non-circular wheel UV region fully transparent")
+    ap.add_argument("--wheel-tire-texture", type=Path,
+                    help="Second original FSH PNG for rectangular tyre-region faces")
+    ap.add_argument("--wheel-tire-uv-scale", type=float, default=1.0,
+                    help="Separate shader UV scale for tyre image")
+    ap.add_argument("--wheel-two-materials", action="store_true",
+                    help="Apply wheel-face artwork to circular faces and tyre artwork to strip faces")
     ap.add_argument("--wheel-face-only", action="store_true",
                     help="Apply wheel image only to candidate circular UV faces; dark material elsewhere")
     ap.add_argument("--wheel-uv-regions", action="store_true",
@@ -110,6 +116,13 @@ def main():
         ap.error("Door offsets require --door-preview")
     if (args.wheel_uv_directory or args.wheel_texture) and not args.wheel_preview:
         ap.error("Wheel UV/textures require --wheel-preview")
+    if args.wheel_two_materials:
+        if not (args.wheel_tire_texture and args.wheel_texture and args.wheel_uv_directory and args.wheel_preview):
+            ap.error("--wheel-two-materials requires --wheel-tire-texture, --wheel-texture, --wheel-uv-directory and --wheel-preview")
+        if args.wheel_face_only or args.wheel_uv_regions or args.wheel_tire_geometry_audit or args.wheel_strip_transparent:
+            ap.error("--wheel-two-materials cannot combine with other wheel region tests")
+    if args.wheel_tire_uv_scale <= 0:
+        ap.error("--wheel-tire-uv-scale must be positive")
     if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
         ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
     if args.wheel_tire_geometry_audit and (not args.wheel_preview or not args.wheel_uv_directory):
@@ -195,6 +208,31 @@ def main():
         wheel_strip_invisible.node_tree.links.new(
             transparent_node.outputs["BSDF"], output_node.inputs["Surface"]
         )
+    wheel_tire_mat = None
+    if args.wheel_two_materials:
+        tire_path = args.wheel_tire_texture.expanduser().resolve()
+        if not tire_path.is_file():
+            ap.error(f"Missing tyre texture: {tire_path}")
+        tire_image = bpy.data.images.load(str(tire_path), check_existing=True)
+        wheel_tire_mat = material("356 • experimental FSH tyre strip", (1, 1, 1))
+        tire_nodes = wheel_tire_mat.node_tree.nodes
+        tire_shader = tire_nodes.get("Principled BSDF")
+        tire_node = tire_nodes.new("ShaderNodeTexImage")
+        tire_node.image = tire_image
+        tire_node.extension = "REPEAT"
+        tire_uv = tire_nodes.new("ShaderNodeTexCoord")
+        tire_scale = tire_nodes.new("ShaderNodeVectorMath")
+        tire_scale.operation = "SCALE"
+        tire_scale.inputs[3].default_value = args.wheel_tire_uv_scale
+        wheel_tire_mat.node_tree.links.new(tire_uv.outputs["UV"], tire_scale.inputs[0])
+        wheel_tire_mat.node_tree.links.new(tire_scale.outputs["Vector"], tire_node.inputs["Vector"])
+        wheel_tire_mat.node_tree.links.new(tire_node.outputs["Color"], tire_shader.inputs["Base Color"])
+        wheel_tire_mat.node_tree.links.new(tire_node.outputs["Alpha"], tire_shader.inputs["Alpha"])
+        if hasattr(wheel_tire_mat, "surface_render_method"):
+            wheel_tire_mat.surface_render_method = "DITHERED"
+        elif hasattr(wheel_tire_mat, "blend_method"):
+            wheel_tire_mat.blend_method = "CLIP"
+
     wheel_mat = None
     if wheel_texture:
         if not wheel_texture.is_file():
@@ -317,12 +355,16 @@ def main():
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
                 obj.hide_render = not display
-                if index in WHEEL_CANDIDATES and (args.wheel_uv_regions or args.wheel_face_only or args.wheel_tire_geometry_audit):
+                if index in WHEEL_CANDIDATES and (args.wheel_uv_regions or args.wheel_face_only or args.wheel_tire_geometry_audit or args.wheel_two_materials):
                     mesh = obj.data
                     if not mesh.uv_layers:
                         raise RuntimeError(f"Wheel article {index}: no UV layer in {source}")
                     mesh.materials.clear()
-                    if args.wheel_face_only:
+                    if args.wheel_two_materials:
+                        mesh.materials.append(wheel_mat)
+                        mesh.materials.append(wheel_tire_mat)
+                        mesh.materials.append(wheel_tire_mat)
+                    elif args.wheel_face_only:
                         mesh.materials.append(wheel_mat)
                         mesh.materials.append(wheel_strip_invisible if args.wheel_strip_transparent else rubber)
                         mesh.materials.append(wheel_strip_invisible if args.wheel_strip_transparent else rubber)
@@ -392,6 +434,10 @@ def main():
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
     if args.wheel_strip_transparent:
         print("356 WHEEL STRIP: debug-only transparency on UV strip/crossing faces; original mesh untouched")
+    if args.wheel_two_materials:
+        print(f"356 WHEEL TWO MATERIALS: circular=wheel image scale {args.wheel_uv_scale:g}; "
+              f"strip={args.wheel_tire_texture.name} scale {args.wheel_tire_uv_scale:g}; "
+              "alpha preserved; all wheel faces retained")
     if args.wheel_tire_geometry_audit:
         print("356 WHEEL GEOMETRY: cyan=circular UV region, magenta=strip, yellow=crossing; nothing hidden")
     if args.wheel_face_only:
