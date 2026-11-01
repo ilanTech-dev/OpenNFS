@@ -75,6 +75,8 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-uv-scale", type=float, default=1.0,
+                    help="Experimental UV multiplier for wheel texture (try 2.0); no OBJ coordinates changed")
     ap.add_argument("--wheel-texture", type=Path,
                     help="Optional local FSH-extracted wheel PNG; identity and UV transform require visual verification")
     ap.add_argument("--wheel-swap-axle-y", action="store_true",
@@ -98,6 +100,10 @@ def main():
         ap.error("Door offsets require --door-preview")
     if (args.wheel_uv_directory or args.wheel_texture) and not args.wheel_preview:
         ap.error("Wheel UV/textures require --wheel-preview")
+    if args.wheel_uv_scale <= 0:
+        ap.error("--wheel-uv-scale must be positive")
+    if args.wheel_uv_scale != 1.0 and not args.wheel_texture:
+        ap.error("--wheel-uv-scale requires --wheel-texture")
     if args.wheel_texture and not args.wheel_uv_directory:
         ap.error("--wheel-texture requires --wheel-uv-directory")
     if args.wheel_swap_axle_y and not args.wheel_preview:
@@ -156,6 +162,13 @@ def main():
         bsdf = nodes.get("Principled BSDF")
         tex = nodes.new("ShaderNodeTexImage")
         tex.image = image
+        tex.extension = "REPEAT"
+        uv_map = nodes.new("ShaderNodeTexCoord")
+        mapping = nodes.new("ShaderNodeVectorMath")
+        mapping.operation = "SCALE"
+        mapping.inputs[3].default_value = args.wheel_uv_scale
+        wheel_mat.node_tree.links.new(uv_map.outputs["UV"], mapping.inputs[0])
+        wheel_mat.node_tree.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
         wheel_mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
         wheel_mat.node_tree.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
         if hasattr(wheel_mat, "surface_render_method"):
@@ -297,7 +310,7 @@ def main():
         print(f"356 WHEEL UV: original first-level UV OBJ geometry imported from {wheel_uv_dir}")
         if wheel_texture:
             print(f"356 WHEEL TEXTURE: experimental image {wheel_texture}; "
-                  "correct FSH assignment, shader scaling and face groups NOT verified")
+                  f"UV scale={args.wheel_uv_scale:g}; correct FSH assignment and face groups NOT verified")
         else:
             print("356 WHEEL UV: no texture assigned; use --crp-textures and FSH extraction to identify original image")
     if args.wheel_preview:
