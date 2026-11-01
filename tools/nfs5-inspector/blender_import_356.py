@@ -75,6 +75,10 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-uv-regions", action="store_true",
+                    help="Debug: colour wheel face UV island cyan and upper rectangular island magenta")
+    ap.add_argument("--wheel-uv-region-v", type=float, default=0.50,
+                    help="Original UV V threshold separating candidate wheel regions")
     ap.add_argument("--wheel-uv-scale", type=float, default=1.0,
                     help="Experimental UV multiplier for wheel texture (try 2.0); no OBJ coordinates changed")
     ap.add_argument("--wheel-texture", type=Path,
@@ -100,6 +104,10 @@ def main():
         ap.error("Door offsets require --door-preview")
     if (args.wheel_uv_directory or args.wheel_texture) and not args.wheel_preview:
         ap.error("Wheel UV/textures require --wheel-preview")
+    if args.wheel_uv_regions and (not args.wheel_preview or not args.wheel_uv_directory):
+        ap.error("--wheel-uv-regions requires --wheel-preview and --wheel-uv-directory")
+    if not 0 < args.wheel_uv_region_v < 1:
+        ap.error("--wheel-uv-region-v must be between 0 and 1")
     if args.wheel_uv_scale <= 0:
         ap.error("--wheel-uv-scale must be positive")
     if args.wheel_uv_scale != 1.0 and not args.wheel_texture:
@@ -152,6 +160,11 @@ def main():
                       if not (wheel_uv_dir / file).is_file()]
         if missing_uv:
             ap.error("Missing wheel UV OBJ files: " + ", ".join(missing_uv))
+    region_mats = (
+        material("356 WHEEL UV REGION: circular candidate — cyan", (0.015, 0.7, 0.9), roughness=0.8),
+        material("356 WHEEL UV REGION: upper strip — magenta", (0.95, 0.04, 0.5), roughness=0.8),
+        material("356 WHEEL UV REGION: crossing threshold — yellow", (0.95, 0.8, 0.02), roughness=0.8),
+    ) if args.wheel_uv_regions else None
     wheel_mat = None
     if wheel_texture:
         if not wheel_texture.is_file():
@@ -274,7 +287,30 @@ def main():
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
                 obj.hide_render = not display
-                if index in WHEEL_CANDIDATES and wheel_mat:
+                if index in WHEEL_CANDIDATES and args.wheel_uv_regions:
+                    mesh = obj.data
+                    if not mesh.uv_layers:
+                        raise RuntimeError(f"Wheel article {index}: no UV layer in {source}")
+                    mesh.materials.clear()
+                    for region in region_mats:
+                        mesh.materials.append(region)
+                    uv_data = mesh.uv_layers.active.data
+                    totals = [0, 0, 0]
+                    for polygon in mesh.polygons:
+                        vcoords = [uv_data[loop_index].uv.y
+                                   for loop_index in polygon.loop_indices]
+                        if max(vcoords) <= args.wheel_uv_region_v:
+                            group = 0
+                        elif min(vcoords) >= args.wheel_uv_region_v:
+                            group = 1
+                        else:
+                            group = 2
+                        polygon.material_index = group
+                        totals[group] += 1
+                    print(f"356 WHEEL UV REGIONS: article={index} total={len(mesh.polygons)} "
+                          f"circular={totals[0]} strip={totals[1]} crossing={totals[2]} "
+                          f"threshold_V={args.wheel_uv_region_v:.3f}")
+                elif index in WHEEL_CANDIDATES and wheel_mat:
                     obj.data.materials.clear()
                     obj.data.materials.append(wheel_mat)
                     if not obj.data.uv_layers:
@@ -306,6 +342,8 @@ def main():
             area.spaces.active.shading.type = "MATERIAL"
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
+    if args.wheel_uv_regions:
+        print("356 WHEEL UV REGIONS: UV-space diagnostic colours ONLY; material semantics unverified")
     if wheel_uv_dir:
         print(f"356 WHEEL UV: original first-level UV OBJ geometry imported from {wheel_uv_dir}")
         if wheel_texture:
