@@ -73,6 +73,10 @@ def main():
                     help="Additional Blender X translation for door group A")
     ap.add_argument("--door-b-x-offset", type=float, default=0.0,
                     help="Additional Blender X translation for door group B")
+    ap.add_argument("--wheel-uv-directory", type=Path,
+                    help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-texture", type=Path,
+                    help="Optional local FSH-extracted wheel PNG; identity and UV transform require visual verification")
     ap.add_argument("--wheel-swap-axle-y", action="store_true",
                     help="Exchange longitudinal CRP translations for paired wheel articles 22/23 and 106/107; requires --wheel-preview")
     ap.add_argument("--wheel-preview", action="store_true",
@@ -92,6 +96,10 @@ def main():
     if not args.door_preview and any((args.door_a_y_offset, args.door_b_y_offset,
                                       args.door_a_x_offset, args.door_b_x_offset)):
         ap.error("Door offsets require --door-preview")
+    if (args.wheel_uv_directory or args.wheel_texture) and not args.wheel_preview:
+        ap.error("Wheel UV/textures require --wheel-preview")
+    if args.wheel_texture and not args.wheel_uv_directory:
+        ap.error("--wheel-texture requires --wheel-uv-directory")
     if args.wheel_swap_axle_y and not args.wheel_preview:
         ap.error("--wheel-swap-axle-y requires --wheel-preview")
     if not args.wheel_preview and any((
@@ -127,6 +135,34 @@ def main():
     lamps = material("356 • provisional lamp face", (0.75, 0.77, 0.73),
                      roughness=0.18)
 
+    wheel_uv_dir = args.wheel_uv_directory.expanduser().resolve() if args.wheel_uv_directory else None
+    wheel_texture = args.wheel_texture.expanduser().resolve() if args.wheel_texture else None
+    wheel_uv_files = {
+        22: "22_WheelFront.obj", 23: "23_WheelRear.obj",
+        106: "106_WheelFront.obj", 107: "107_WheelRear.obj",
+    }
+    if wheel_uv_dir:
+        missing_uv = [str(wheel_uv_dir / file) for file in wheel_uv_files.values()
+                      if not (wheel_uv_dir / file).is_file()]
+        if missing_uv:
+            ap.error("Missing wheel UV OBJ files: " + ", ".join(missing_uv))
+    wheel_mat = None
+    if wheel_texture:
+        if not wheel_texture.is_file():
+            ap.error(f"Missing wheel image: {wheel_texture}")
+        image = bpy.data.images.load(str(wheel_texture), check_existing=True)
+        wheel_mat = material("356 • experimental original wheel atlas (unverified)", (1, 1, 1))
+        nodes = wheel_mat.node_tree.nodes
+        bsdf = nodes.get("Principled BSDF")
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.image = image
+        wheel_mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        wheel_mat.node_tree.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        if hasattr(wheel_mat, "surface_render_method"):
+            wheel_mat.surface_render_method = "DITHERED"
+        elif hasattr(wheel_mat, "blend_method"):
+            wheel_mat.blend_method = "CLIP"
+
     imported = 0
     missing = []
     with manifest.open(newline="") as handle:
@@ -138,6 +174,8 @@ def main():
             if not source.is_file():
                 missing.append(str(source))
                 continue
+            if wheel_uv_dir is not None and index in wheel_uv_files:
+                source = wheel_uv_dir / wheel_uv_files[index]
             old = set(bpy.data.objects.keys())
             if hasattr(bpy.ops.wm, "obj_import"):
                 bpy.ops.wm.obj_import(filepath=str(source))
@@ -223,7 +261,12 @@ def main():
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
                 obj.hide_render = not display
-                if index in GLASS:
+                if index in WHEEL_CANDIDATES and wheel_mat:
+                    obj.data.materials.clear()
+                    obj.data.materials.append(wheel_mat)
+                    if not obj.data.uv_layers:
+                        raise RuntimeError(f"Wheel article {index}: UV layer absent in {source}")
+                elif index in GLASS:
                     obj.data.materials.clear()
                     obj.data.materials.append(glass)
                 elif index in (8, 9, 21):
@@ -250,6 +293,13 @@ def main():
             area.spaces.active.shading.type = "MATERIAL"
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
+    if wheel_uv_dir:
+        print(f"356 WHEEL UV: original first-level UV OBJ geometry imported from {wheel_uv_dir}")
+        if wheel_texture:
+            print(f"356 WHEEL TEXTURE: experimental image {wheel_texture}; "
+                  "correct FSH assignment, shader scaling and face groups NOT verified")
+        else:
+            print("356 WHEEL UV: no texture assigned; use --crp-textures and FSH extraction to identify original image")
     if args.wheel_preview:
         print(f"356 WHEEL PREVIEW: longitudinal axle swap {'ON' if args.wheel_swap_axle_y else 'OFF'}")
         print("356 WHEEL PREVIEW: 22/106 front and 23/107 rear are independently "
