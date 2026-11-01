@@ -75,6 +75,8 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-strip-transparent", action="store_true",
+                    help="Experimental: make the non-circular wheel UV region fully transparent")
     ap.add_argument("--wheel-face-only", action="store_true",
                     help="Apply wheel image only to candidate circular UV faces; dark material elsewhere")
     ap.add_argument("--wheel-uv-regions", action="store_true",
@@ -108,6 +110,8 @@ def main():
         ap.error("Wheel UV/textures require --wheel-preview")
     if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
         ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
+    if args.wheel_strip_transparent and not args.wheel_face_only:
+        ap.error("--wheel-strip-transparent requires --wheel-face-only")
     if args.wheel_face_only and args.wheel_uv_regions:
         ap.error("Choose one of --wheel-face-only and --wheel-uv-regions")
     if args.wheel_uv_regions and (not args.wheel_preview or not args.wheel_uv_directory):
@@ -171,6 +175,20 @@ def main():
         material("356 WHEEL UV REGION: upper strip — magenta", (0.95, 0.04, 0.5), roughness=0.8),
         material("356 WHEEL UV REGION: crossing threshold — yellow", (0.95, 0.8, 0.02), roughness=0.8),
     ) if args.wheel_uv_regions else None
+    wheel_strip_invisible = None
+    if args.wheel_strip_transparent:
+        wheel_strip_invisible = material(
+            "356 WHEEL DIAGNOSTIC — fully transparent UV strip", (0, 0, 0),
+            roughness=1, alpha=0.0
+        )
+        wheel_strip_invisible.use_nodes = True
+        transparent_nodes = wheel_strip_invisible.node_tree.nodes
+        transparent_nodes.clear()
+        output_node = transparent_nodes.new("ShaderNodeOutputMaterial")
+        transparent_node = transparent_nodes.new("ShaderNodeBsdfTransparent")
+        wheel_strip_invisible.node_tree.links.new(
+            transparent_node.outputs["BSDF"], output_node.inputs["Surface"]
+        )
     wheel_mat = None
     if wheel_texture:
         if not wheel_texture.is_file():
@@ -300,8 +318,8 @@ def main():
                     mesh.materials.clear()
                     if args.wheel_face_only:
                         mesh.materials.append(wheel_mat)
-                        mesh.materials.append(rubber)
-                        mesh.materials.append(rubber)
+                        mesh.materials.append(wheel_strip_invisible if args.wheel_strip_transparent else rubber)
+                        mesh.materials.append(wheel_strip_invisible if args.wheel_strip_transparent else rubber)
                     else:
                         for region in region_mats:
                             mesh.materials.append(region)
@@ -353,6 +371,8 @@ def main():
             area.spaces.active.shading.type = "MATERIAL"
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
+    if args.wheel_strip_transparent:
+        print("356 WHEEL STRIP: debug-only transparency on UV strip/crossing faces; original mesh untouched")
     if args.wheel_face_only:
         print("356 WHEEL FACE-ONLY: circular UV candidates use wheel artwork; other faces use provisional dark material")
     if args.wheel_uv_regions:
