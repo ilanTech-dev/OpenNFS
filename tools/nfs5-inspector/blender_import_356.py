@@ -67,6 +67,9 @@ def main():
     ap.add_argument("--light-uv-directory", type=Path,
                     help="Optional UV OBJ directory for articles 8/9/21 from --article-uv-mesh")
     ap.add_argument("--headlight-uv-scale", type=float, default=5.7)
+    ap.add_argument("--headlight-uv-rotate-deg", type=float, default=0.0)
+    ap.add_argument("--aux-light-uv-rotate-deg", type=float, default=0.0)
+    ap.add_argument("--rear-light-uv-rotate-deg", type=float, default=0.0)
     ap.add_argument("--aux-light-uv-scale", type=float, default=1.0)
     ap.add_argument("--rear-light-uv-scale", type=float, default=1.0)
     ap.add_argument("--headlight-uv-offset-u", type=float, default=0.0)
@@ -266,6 +269,11 @@ def main():
                 21: (args.rear_light_uv_scale, args.rear_light_uv_offset_u, args.rear_light_uv_offset_v),
             }
             uv_scale, offset_u, offset_v = controls[article]
+            rotate_degrees = {
+                8: args.headlight_uv_rotate_deg,
+                9: args.aux_light_uv_rotate_deg,
+                21: args.rear_light_uv_rotate_deg,
+            }[article]
             uv = mat.node_tree.nodes.new("ShaderNodeTexCoord")
             mapping = mat.node_tree.nodes.new("ShaderNodeVectorMath")
             mapping.operation = "SCALE"
@@ -275,7 +283,14 @@ def main():
             offset.inputs[1].default_value = (offset_u, offset_v, 0.0)
             mat.node_tree.links.new(uv.outputs["UV"], mapping.inputs[0])
             mat.node_tree.links.new(mapping.outputs["Vector"], offset.inputs[0])
-            mat.node_tree.links.new(offset.outputs["Vector"], tex.inputs["Vector"])
+            # Rotate in texture space AFTER scale and offset, around the
+            # centre of the texture image rather than the original tiny UV island.
+            rotate = mat.node_tree.nodes.new("ShaderNodeVectorRotate")
+            rotate.rotation_type = "Z_AXIS"
+            rotate.inputs["Center"].default_value = (0.5, 0.5, 0.0)
+            rotate.inputs["Angle"].default_value = math.radians(rotate_degrees)
+            mat.node_tree.links.new(offset.outputs["Vector"], rotate.inputs["Vector"])
+            mat.node_tree.links.new(rotate.outputs["Vector"], tex.inputs["Vector"])
             mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
             mat.node_tree.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
             if hasattr(mat, "surface_render_method"):
