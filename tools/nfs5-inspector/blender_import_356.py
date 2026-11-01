@@ -27,6 +27,10 @@ GLASS = {18, 35, 36, 37, 38, 104, 110, 111}
 ALTERNATIVE_ROOFS = {24, 30, 31}
 MIRROR_CANDIDATES = {4, 103, 18, 104, 19, 105}
 WHEEL_CANDIDATES = {22, 23, 106, 107}
+# Optional exterior trim: decals, wiper, antenna. Door handles already belong
+# to --door-preview and lights 8/9/21 are already in the default view.
+DETAIL_ARTICLES = {10, 11, 12, 26, 29, 73}
+LIGHT_ARTICLES = {8: "Light1", 9: "Light3", 21: "Light2_"}
 # Paired articles are provisional: original file lists two DoorOut articles
 # and corresponding exterior window, glass and handle variants.
 DOOR_GROUPS = {
@@ -58,6 +62,12 @@ def main():
     ap.add_argument("batch", type=Path)
     ap.add_argument("metadata", type=Path)
     ap.add_argument("--save-blend", type=Path)
+    ap.add_argument("--exterior-detail-preview", action="store_true",
+                    help="Show wiper, badges/decals and antenna candidates (transforms unverified)")
+    ap.add_argument("--light-uv-directory", type=Path,
+                    help="Optional UV OBJ directory for articles 8/9/21 from --article-uv-mesh")
+    ap.add_argument("--light-texture-directory", type=Path,
+                    help="Optional extracted PNG directory for experimental original 356 light materials")
     ap.add_argument("--bonnet-y-offset", type=float, default=1.21,
                     help="Additional Blender +Y offset for article 3; requires --panel-transform-preview")
     ap.add_argument("--decklid-y-offset", type=float, default=-2.23,
@@ -122,6 +132,8 @@ def main():
                     help="Diagnostic mode: show every imported mesh, including alternatives")
     options = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = ap.parse_args(options)
+    if args.light_texture_directory and not args.light_uv_directory:
+        ap.error("--light-texture-directory requires --light-uv-directory")
     if not args.panel_transform_preview and (args.bonnet_y_offset != 1.21 or args.decklid_y_offset != -2.23):
         ap.error("Y offsets require --panel-transform-preview")
     if not args.door_preview and any((args.door_a_y_offset, args.door_b_y_offset,
@@ -211,6 +223,38 @@ def main():
                       roughness=0.67)
     lamps = material("356 • provisional lamp face", (0.75, 0.77, 0.73),
                      roughness=0.18)
+
+    light_uv_dir = args.light_uv_directory.expanduser().resolve() if args.light_uv_directory else None
+    light_png_dir = args.light_texture_directory.expanduser().resolve() if args.light_texture_directory else None
+    light_uv_files = {article: f"{article}_{name}.obj" for article, name in LIGHT_ARTICLES.items()}
+    if light_uv_dir:
+        missing_light_uv = [str(light_uv_dir / name) for name in light_uv_files.values()
+                            if not (light_uv_dir / name).is_file()]
+        if missing_light_uv:
+            ap.error("Missing light UV OBJ files: " + ", ".join(missing_light_uv))
+    # Candidate assignments based on extracted filenames. Actual material links
+    # and additional original shader UV transforms are not yet established.
+    light_png_candidates = {8: "fs-0-08-lit1.png",
+                            9: "fs-0-19-lit3.png", 21: "fs-0-18-lit2.png"}
+    light_materials = {}
+    if light_png_dir:
+        for article, filename in light_png_candidates.items():
+            image_path = light_png_dir / filename
+            if not image_path.is_file():
+                ap.error(f"Missing candidate light texture: {image_path}")
+            image = bpy.data.images.load(str(image_path), check_existing=True)
+            mat = material(f"356 — experimental {LIGHT_ARTICLES[article]} {filename}",
+                           (1, 1, 1), roughness=0.22)
+            bsdf = mat.node_tree.nodes.get("Principled BSDF")
+            tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            tex.image = image
+            mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+            mat.node_tree.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+            if hasattr(mat, "surface_render_method"):
+                mat.surface_render_method = "DITHERED"
+            elif hasattr(mat, "blend_method"):
+                mat.blend_method = "CLIP"
+            light_materials[article] = mat
 
     wheel_uv_dir = args.wheel_uv_directory.expanduser().resolve() if args.wheel_uv_directory else None
     wheel_texture = args.wheel_texture.expanduser().resolve() if args.wheel_texture else None
@@ -350,6 +394,8 @@ def main():
             if not source.is_file():
                 missing.append(str(source))
                 continue
+            if light_uv_dir is not None and index in light_uv_files:
+                source = light_uv_dir / light_uv_files[index]
             if wheel_uv_dir is not None and index in wheel_uv_files:
                 source = wheel_uv_dir / wheel_uv_files[index]
             old = set(bpy.data.objects.keys())
@@ -433,6 +479,7 @@ def main():
                 # CRP mesh buffers already encode world positions and others
                 # are local panel geometry; only a mesh-by-mesh review can tell.
                 display = (args.all_visible or index in VISIBLE or
+                           (args.exterior_detail_preview and index in DETAIL_ARTICLES) or
                            (args.door_preview and index in DOOR_ARTICLES) or
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
@@ -512,9 +559,11 @@ def main():
                 elif index in GLASS:
                     obj.data.materials.clear()
                     obj.data.materials.append(glass)
-                elif index in (8, 9, 21):
+                elif index in LIGHT_ARTICLES:
                     obj.data.materials.clear()
-                    obj.data.materials.append(lamps)
+                    obj.data.materials.append(light_materials.get(index, lamps))
+                    if index in light_materials and not obj.data.uv_layers:
+                        raise RuntimeError(f"356 light article {index}: imported OBJ lacks UVs: {source}")
                 elif index in (1, 2, 15, 22, 23, 27, 28, 84, 85, 106, 107):
                     obj.data.materials.clear()
                     obj.data.materials.append(rubber)
@@ -598,6 +647,13 @@ def main():
         print("356 BACKING TEXTURE: testing alpha-clipped original backing faces; OBJ unchanged")
     if args.wheel_remove_backing:
         print("356 WHEEL CLEANUP: only verified square backing triangles removed in Blender; source OBJ untouched")
+    if args.exterior_detail_preview:
+        print(f"356 EXTERIOR DETAIL: optional candidates visible {sorted(DETAIL_ARTICLES)}; "
+              "placements and original decal shaders remain unverified")
+    if light_uv_dir:
+        print("356 LIGHT UV: using original article UV OBJ files for 8/9/21")
+        if light_materials:
+            print("356 LIGHT TEXTURES: experimental original lit1/lit3/lit2 PNGs; mapping NOT verified")
     if args.wheel_backing_hide:
         print("356 BACKING HIDE: diagnostic only — transparent shader on two identified square faces per wheel")
     if args.wheel_radial_audit:
