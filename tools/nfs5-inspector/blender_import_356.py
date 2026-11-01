@@ -64,6 +64,8 @@ def main():
     ap.add_argument("--save-blend", type=Path)
     ap.add_argument("--trim-articles", default="",
                     help="Comma-separated extra article IDs to display individually: 10,11,12,26,29,73; complements --exterior-detail-preview")
+    ap.add_argument("--panel-decal-preview", action="store_true",
+                    help="Test bonnet/decklid panel transforms on decal articles 10/12")
     ap.add_argument("--trim-audit", action="store_true",
                     help="Print world-space bounding boxes of body-adjacent trim candidates")
     ap.add_argument("--exterior-detail-preview", action="store_true",
@@ -152,6 +154,8 @@ def main():
         ap.error("Light UV scales must be positive")
     if args.light_texture_directory and not args.light_uv_directory:
         ap.error("--light-texture-directory requires --light-uv-directory")
+    if args.panel_decal_preview and not args.panel_transform_preview:
+        ap.error("--panel-decal-preview requires --panel-transform-preview")
     if not args.panel_transform_preview and (args.bonnet_y_offset != 1.21 or args.decklid_y_offset != -2.23):
         ap.error("Y offsets require --panel-transform-preview")
     if not args.door_preview and any((args.door_a_y_offset, args.door_b_y_offset,
@@ -486,6 +490,18 @@ def main():
                               f"rotation_X=90deg Y_offset={y_offset:+.4f}")
                     else:
                         print(f"356 PANEL PREVIEW: {index} has no metadata transform; unchanged")
+                if args.panel_decal_preview and index in (10, 12):
+                    panel_index = 3 if index == 10 else 6
+                    panel_info = metadata.get(panel_index, {})
+                    if panel_info.get("has_transform") != "1":
+                        raise RuntimeError(f"356 decal {index}: panel {panel_index} lacks transform")
+                    tx, ty, tz = (float(panel_info[k]) for k in ("tx", "ty", "tz"))
+                    delta_y = args.bonnet_y_offset if index == 10 else args.decklid_y_offset
+                    obj.location = (tx, tz + delta_y, ty)
+                    obj.rotation_euler = (math.pi / 2, 0.0, 0.0)
+                    obj["placement_status"] = f"EXPERIMENTAL panel {panel_index} transform, unverified"
+                    print(f"356 PANEL DECAL: article={index} panel={panel_index} "
+                          f"location={tuple(round(v, 4) for v in obj.location)}")
                 if args.door_preview and index in DOOR_ARTICLES:
                     group = "A" if index in DOOR_GROUPS["A"] else "B"
                     delta_x = args.door_a_x_offset if group == "A" else args.door_b_x_offset
@@ -538,6 +554,7 @@ def main():
                 display = (args.all_visible or index in VISIBLE or
                            (args.exterior_detail_preview and index in DETAIL_ARTICLES) or
                            index in selected_trim or
+                           (args.panel_decal_preview and index in (10, 12)) or
                            (args.door_preview and index in DOOR_ARTICLES) or
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
@@ -722,6 +739,8 @@ def main():
         print("356 BACKING TEXTURE: testing alpha-clipped original backing faces; OBJ unchanged")
     if args.wheel_remove_backing:
         print("356 WHEEL CLEANUP: only verified square backing triangles removed in Blender; source OBJ untouched")
+    if args.panel_decal_preview:
+        print("356 PANEL DECAL: panel transform applied to articles 10/12 as test; verify fit")
     if selected_trim:
         print(f"356 TRIM SELECTED: {sorted(selected_trim)}")
     if args.trim_audit:
