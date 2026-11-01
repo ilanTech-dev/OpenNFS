@@ -75,6 +75,10 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-radial-audit", action="store_true",
+                    help="Mark individual wheel triangles outside the inferred Y/Z circular profile")
+    ap.add_argument("--wheel-radial-limit", type=float, default=0.325,
+                    help="Radial distance threshold in wheel-local Y/Z for --wheel-radial-audit")
     ap.add_argument("--wheel-tire-geometry-audit", action="store_true",
                     help="Color and log wheel UV regions with geometric local bounding boxes; no faces hidden")
     ap.add_argument("--wheel-strip-transparent", action="store_true",
@@ -125,6 +129,12 @@ def main():
         ap.error("--wheel-tire-uv-scale must be positive")
     if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
         ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
+    if args.wheel_radial_audit and (not args.wheel_preview or not args.wheel_uv_directory):
+        ap.error("--wheel-radial-audit requires --wheel-preview and --wheel-uv-directory")
+    if args.wheel_radial_limit <= 0:
+        ap.error("--wheel-radial-limit must be positive")
+    if args.wheel_radial_audit and (args.wheel_tire_geometry_audit or args.wheel_uv_regions or args.wheel_face_only or args.wheel_two_materials or args.wheel_strip_transparent):
+        ap.error("--wheel-radial-audit is exclusive with other wheel material diagnostics")
     if args.wheel_tire_geometry_audit and (not args.wheel_preview or not args.wheel_uv_directory):
         ap.error("--wheel-tire-geometry-audit requires --wheel-preview and --wheel-uv-directory")
     if args.wheel_tire_geometry_audit and (args.wheel_face_only or args.wheel_uv_regions or args.wheel_strip_transparent):
@@ -208,6 +218,11 @@ def main():
         wheel_strip_invisible.node_tree.links.new(
             transparent_node.outputs["BSDF"], output_node.inputs["Surface"]
         )
+    radial_mats = (
+        material("356 radial audit — within circle (blue)", (0.02, 0.25, 0.72), roughness=0.85),
+        material("356 radial audit — crosses circle (orange)", (1.0, 0.38, 0.02), roughness=0.85),
+        material("356 radial audit — entirely outside circle (red)", (0.95, 0.02, 0.08), roughness=0.85),
+    ) if args.wheel_radial_audit else None
     wheel_tire_mat = None
     if args.wheel_two_materials:
         tire_path = args.wheel_tire_texture.expanduser().resolve()
@@ -355,7 +370,29 @@ def main():
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
                 obj.hide_render = not display
-                if index in WHEEL_CANDIDATES and (args.wheel_uv_regions or args.wheel_face_only or args.wheel_tire_geometry_audit or args.wheel_two_materials):
+                if index in WHEEL_CANDIDATES and args.wheel_radial_audit:
+                    mesh = obj.data
+                    mesh.materials.clear()
+                    for mat in radial_mats:
+                        mesh.materials.append(mat)
+                    counts = [0, 0, 0]
+                    for face in mesh.polygons:
+                        radii = [math.hypot(mesh.vertices[k].co.y, mesh.vertices[k].co.z)
+                                 for k in face.vertices]
+                        label = (0 if max(radii) <= args.wheel_radial_limit else
+                                 2 if min(radii) > args.wheel_radial_limit else 1)
+                        face.material_index = label
+                        counts[label] += 1
+                        if label:
+                            xyz = [tuple(round(mesh.vertices[k].co[a], 5) for a in range(3))
+                                   for k in face.vertices]
+                            print(f"356 RADIAL FACE: article={index} polygon={face.index} "
+                                  f"region={label} radii={[round(v,5) for v in radii]} "
+                                  f"xyz={xyz}")
+                    print(f"356 RADIAL SUMMARY: article={index} "
+                          f"radius_limit={args.wheel_radial_limit:.5f} "
+                          f"inside={counts[0]} crossing={counts[1]} outside={counts[2]}")
+                elif index in WHEEL_CANDIDATES and (args.wheel_uv_regions or args.wheel_face_only or args.wheel_tire_geometry_audit or args.wheel_two_materials):
                     mesh = obj.data
                     if not mesh.uv_layers:
                         raise RuntimeError(f"Wheel article {index}: no UV layer in {source}")
@@ -434,6 +471,8 @@ def main():
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
     if args.wheel_strip_transparent:
         print("356 WHEEL STRIP: debug-only transparency on UV strip/crossing faces; original mesh untouched")
+    if args.wheel_radial_audit:
+        print("356 RADIAL AUDIT: blue=inside; orange=crosses radius; red=outside; mesh unchanged")
     if args.wheel_two_materials:
         print(f"356 WHEEL TWO MATERIALS: circular=wheel image scale {args.wheel_uv_scale:g}; "
               f"strip={args.wheel_tire_texture.name} scale {args.wheel_tire_uv_scale:g}; "
