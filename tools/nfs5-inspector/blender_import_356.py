@@ -75,6 +75,8 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-backing-hide", action="store_true",
+                    help="Diagnostic: hide only the two confirmed square backing triangles (112,113), preserving tyre")
     ap.add_argument("--wheel-radial-audit", action="store_true",
                     help="Mark individual wheel triangles outside the inferred Y/Z circular profile")
     ap.add_argument("--wheel-radial-limit", type=float, default=0.325,
@@ -129,6 +131,10 @@ def main():
         ap.error("--wheel-tire-uv-scale must be positive")
     if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
         ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
+    if args.wheel_backing_hide and (not args.wheel_preview or not args.wheel_uv_directory):
+        ap.error("--wheel-backing-hide requires --wheel-preview and --wheel-uv-directory")
+    if args.wheel_backing_hide and (args.wheel_radial_audit or args.wheel_uv_regions or args.wheel_tire_geometry_audit or args.wheel_strip_transparent):
+        ap.error("--wheel-backing-hide conflicts with diagnostic coloring or whole-strip transparency")
     if args.wheel_radial_audit and (not args.wheel_preview or not args.wheel_uv_directory):
         ap.error("--wheel-radial-audit requires --wheel-preview and --wheel-uv-directory")
     if args.wheel_radial_limit <= 0:
@@ -223,6 +229,15 @@ def main():
         material("356 radial audit — crosses circle (orange)", (1.0, 0.38, 0.02), roughness=0.85),
         material("356 radial audit — entirely outside circle (red)", (0.95, 0.02, 0.08), roughness=0.85),
     ) if args.wheel_radial_audit else None
+    backing_transparent = None
+    if args.wheel_backing_hide:
+        backing_transparent = bpy.data.materials.new("356 — backing quad hidden (diagnostic)")
+        backing_transparent.use_nodes = True
+        backing_nodes = backing_transparent.node_tree.nodes
+        backing_nodes.clear()
+        out = backing_nodes.new("ShaderNodeOutputMaterial")
+        transparent = backing_nodes.new("ShaderNodeBsdfTransparent")
+        backing_transparent.node_tree.links.new(transparent.outputs["BSDF"], out.inputs["Surface"])
     wheel_tire_mat = None
     if args.wheel_two_materials:
         tire_path = args.wheel_tire_texture.expanduser().resolve()
@@ -454,6 +469,21 @@ def main():
                 else:
                     obj.data.materials.clear()
                     obj.data.materials.append(paint)
+                if args.wheel_backing_hide and index in WHEEL_CANDIDATES:
+                    mesh = obj.data
+                    if len(mesh.polygons) != 114:
+                        raise RuntimeError(f"356 wheel article {index}: expected 114 triangles; got {len(mesh.polygons)}")
+                    mesh.materials.append(backing_transparent)
+                    slot = len(mesh.materials) - 1
+                    for face_id in (112, 113):
+                        polygon = mesh.polygons[face_id]
+                        radii = [math.hypot(mesh.vertices[k].co.y, mesh.vertices[k].co.z)
+                                 for k in polygon.vertices]
+                        if min(radii) <= 0.325:
+                            raise RuntimeError(f"Wheel {index} face {face_id} is not the expected backing quad")
+                        polygon.material_index = slot
+                    print(f"356 BACKING HIDE: article={index} only polygons 112/113 transparent; "
+                          "original mesh/UV retained")
                 imported += 1
 
     scene = bpy.context.scene
@@ -471,6 +501,8 @@ def main():
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
     if args.wheel_strip_transparent:
         print("356 WHEEL STRIP: debug-only transparency on UV strip/crossing faces; original mesh untouched")
+    if args.wheel_backing_hide:
+        print("356 BACKING HIDE: diagnostic only — transparent shader on two identified square faces per wheel")
     if args.wheel_radial_audit:
         print("356 RADIAL AUDIT: blue=inside; orange=crosses radius; red=outside; mesh unchanged")
     if args.wheel_two_materials:
