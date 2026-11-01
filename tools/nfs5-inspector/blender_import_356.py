@@ -76,6 +76,10 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-backing-texture", type=Path,
+                    help="Candidate RGBA PNG for original square backing triangles 112/113")
+    ap.add_argument("--wheel-backing-uv-scale", type=float, default=1.0)
+    ap.add_argument("--wheel-backing-alpha-threshold", type=float, default=0.5)
     ap.add_argument("--wheel-remove-backing", action="store_true",
                     help="Remove only validated backing triangles 112/113 from 356 wheel Blender meshes")
     ap.add_argument("--wheel-backing-hide", action="store_true",
@@ -134,6 +138,13 @@ def main():
         ap.error("--wheel-tire-uv-scale must be positive")
     if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
         ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
+    if args.wheel_backing_texture:
+        if not (args.wheel_preview and args.wheel_uv_directory):
+            ap.error("--wheel-backing-texture requires --wheel-preview and --wheel-uv-directory")
+        if args.wheel_remove_backing or args.wheel_backing_hide or args.wheel_radial_audit:
+            ap.error("--wheel-backing-texture conflicts with other backing diagnostics")
+    if args.wheel_backing_uv_scale <= 0 or not 0 <= args.wheel_backing_alpha_threshold <= 1:
+        ap.error("Invalid backing UV scale or alpha threshold")
     if args.wheel_remove_backing and (not args.wheel_preview or not args.wheel_uv_directory):
         ap.error("--wheel-remove-backing requires --wheel-preview and --wheel-uv-directory")
     if args.wheel_remove_backing and (args.wheel_backing_hide or args.wheel_radial_audit or args.wheel_tire_geometry_audit):
@@ -245,6 +256,40 @@ def main():
         out = backing_nodes.new("ShaderNodeOutputMaterial")
         transparent = backing_nodes.new("ShaderNodeBsdfTransparent")
         backing_transparent.node_tree.links.new(transparent.outputs["BSDF"], out.inputs["Surface"])
+    backing_mat = None
+    if args.wheel_backing_texture:
+        backing_path = args.wheel_backing_texture.expanduser().resolve()
+        if not backing_path.is_file():
+            ap.error(f"Backing image missing: {backing_path}")
+        backing_image = bpy.data.images.load(str(backing_path), check_existing=True)
+        backing_mat = bpy.data.materials.new("356 — candidate alpha-clipped wheel backing")
+        backing_mat.use_nodes = True
+        nodes = backing_mat.node_tree.nodes
+        nodes.clear()
+        output_node = nodes.new("ShaderNodeOutputMaterial")
+        shader = nodes.new("ShaderNodeBsdfPrincipled")
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.image = backing_image
+        tex.extension = "CLIP"
+        uv = nodes.new("ShaderNodeTexCoord")
+        scale = nodes.new("ShaderNodeVectorMath")
+        scale.operation = "SCALE"
+        scale.inputs[3].default_value = args.wheel_backing_uv_scale
+        threshold = nodes.new("ShaderNodeMath")
+        threshold.operation = "GREATER_THAN"
+        threshold.inputs[1].default_value = args.wheel_backing_alpha_threshold
+        links = backing_mat.node_tree.links
+        links.new(uv.outputs["UV"], scale.inputs[0])
+        links.new(scale.outputs["Vector"], tex.inputs["Vector"])
+        links.new(tex.outputs["Color"], shader.inputs["Base Color"])
+        links.new(tex.outputs["Alpha"], threshold.inputs[0])
+        links.new(threshold.outputs["Value"], shader.inputs["Alpha"])
+        links.new(shader.outputs["BSDF"], output_node.inputs["Surface"])
+        if hasattr(backing_mat, "surface_render_method"):
+            backing_mat.surface_render_method = "DITHERED"
+        elif hasattr(backing_mat, "blend_method"):
+            backing_mat.blend_method = "CLIP"
+            backing_mat.alpha_threshold = args.wheel_backing_alpha_threshold
     wheel_tire_mat = None
     if args.wheel_two_materials:
         tire_path = args.wheel_tire_texture.expanduser().resolve()
@@ -476,6 +521,24 @@ def main():
                 else:
                     obj.data.materials.clear()
                     obj.data.materials.append(paint)
+                if backing_mat is not None and index in WHEEL_CANDIDATES:
+                    mesh = obj.data
+                    if len(mesh.polygons) != 114 or not mesh.uv_layers:
+                        raise RuntimeError(f"356 wheel {index}: expected original 114-triangle UV mesh")
+                    for face_id in (112, 113):
+                        polygon = mesh.polygons[face_id]
+                        radial = [math.hypot(mesh.vertices[k].co.y, mesh.vertices[k].co.z)
+                                  for k in polygon.vertices]
+                        axial = [mesh.vertices[k].co.x for k in polygon.vertices]
+                        if min(radial) < 0.44 or max(axial) - min(axial) > 0.0001:
+                            raise RuntimeError(f"356 wheel {index} face {face_id}: backing geometry mismatch")
+                    mesh.materials.append(backing_mat)
+                    backing_slot = len(mesh.materials) - 1
+                    for face_id in (112, 113):
+                        mesh.polygons[face_id].material_index = backing_slot
+                    print(f"356 BACKING TEXTURE: article={index} faces=112/113 "
+                          f"image={backing_path.name} scale={args.wheel_backing_uv_scale:g} "
+                          f"alpha_threshold={args.wheel_backing_alpha_threshold:g}")
                 if args.wheel_backing_hide and index in WHEEL_CANDIDATES:
                     mesh = obj.data
                     if len(mesh.polygons) != 114:
@@ -531,6 +594,8 @@ def main():
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
     if args.wheel_strip_transparent:
         print("356 WHEEL STRIP: debug-only transparency on UV strip/crossing faces; original mesh untouched")
+    if backing_mat:
+        print("356 BACKING TEXTURE: testing alpha-clipped original backing faces; OBJ unchanged")
     if args.wheel_remove_backing:
         print("356 WHEEL CLEANUP: only verified square backing triangles removed in Blender; source OBJ untouched")
     if args.wheel_backing_hide:
