@@ -62,6 +62,10 @@ def main():
     ap.add_argument("batch", type=Path)
     ap.add_argument("metadata", type=Path)
     ap.add_argument("--save-blend", type=Path)
+    ap.add_argument("--trim-articles", default="",
+                    help="Comma-separated extra article IDs to display individually: 10,11,12,26,29,73; complements --exterior-detail-preview")
+    ap.add_argument("--trim-audit", action="store_true",
+                    help="Print world-space bounding boxes of body-adjacent trim candidates")
     ap.add_argument("--exterior-detail-preview", action="store_true",
                     help="Show wiper, badges/decals and antenna candidates (transforms unverified)")
     ap.add_argument("--light-uv-directory", type=Path,
@@ -210,6 +214,12 @@ def main():
         args.rear_wheel_x_offset, args.rear_wheel_y_offset, args.rear_wheel_z_offset
     )):
         ap.error("Wheel offsets require --wheel-preview")
+    try:
+        selected_trim = set(int(v.strip()) for v in args.trim_articles.split(",") if v.strip())
+    except ValueError:
+        ap.error("--trim-articles must be comma-separated article numbers")
+    if selected_trim - DETAIL_ARTICLES:
+        ap.error(f"--trim-articles supports only {sorted(DETAIL_ARTICLES)}")
     batch = args.batch.expanduser().resolve()
     meta_path = args.metadata.expanduser().resolve()
     manifest = batch / "manifest.csv"
@@ -235,6 +245,10 @@ def main():
                      roughness=0.14, alpha=0.43)
     rubber = material("356 • provisional dark detail", (0.025, 0.028, 0.03),
                       roughness=0.67)
+    chrome = material("356 • provisional polished metal", (0.56, 0.60, 0.61),
+                      metallic=0.82, roughness=0.22)
+    dark_trim = material("356 • provisional wiper and antenna", (0.07, 0.075, 0.08),
+                         metallic=0.35, roughness=0.44)
     lamps = material("356 • provisional lamp face", (0.75, 0.77, 0.73),
                      roughness=0.18)
 
@@ -523,6 +537,7 @@ def main():
                 # are local panel geometry; only a mesh-by-mesh review can tell.
                 display = (args.all_visible or index in VISIBLE or
                            (args.exterior_detail_preview and index in DETAIL_ARTICLES) or
+                           index in selected_trim or
                            (args.door_preview and index in DOOR_ARTICLES) or
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
@@ -599,6 +614,12 @@ def main():
                     obj.data.materials.append(wheel_mat)
                     if not obj.data.uv_layers:
                         raise RuntimeError(f"Wheel article {index}: UV layer absent in {source}")
+                elif index in (15, 16, 19, 105):
+                    obj.data.materials.clear()
+                    obj.data.materials.append(chrome)
+                elif index in (26, 73):
+                    obj.data.materials.clear()
+                    obj.data.materials.append(dark_trim)
                 elif index in GLASS:
                     obj.data.materials.clear()
                     obj.data.materials.append(glass)
@@ -669,6 +690,17 @@ def main():
                         bm.free()
                     obj["wheel_backing_cleanup"] = "Removed original polygons 112 and 113 in Blender only"
                     print(f"356 WHEEL CLEANUP: article={index} removed=112,113 remaining={len(mesh.polygons)}")
+                if args.trim_audit and index in (10, 11, 12, 15, 16, 19, 26, 29, 73, 105):
+                    from mathutils import Vector
+                    # Evaluating the world transform captures door parenting and
+                    # the source OBJ's local-to-Blender axis conversion.
+                    bpy.context.view_layer.update()
+                    verts_world = [obj.matrix_world @ Vector(v) for v in obj.bound_box]
+                    bounds = [(round(min(v[i] for v in verts_world), 4),
+                               round(max(v[i] for v in verts_world), 4)) for i in range(3)]
+                    print(f"356 TRIM AUDIT: article={index} name={row['name']} "
+                          f"visible={display} bounds_world_XYZ={bounds} "
+                          f"location={tuple(round(x, 4) for x in obj.location)}")
                 imported += 1
 
     scene = bpy.context.scene
@@ -690,6 +722,10 @@ def main():
         print("356 BACKING TEXTURE: testing alpha-clipped original backing faces; OBJ unchanged")
     if args.wheel_remove_backing:
         print("356 WHEEL CLEANUP: only verified square backing triangles removed in Blender; source OBJ untouched")
+    if selected_trim:
+        print(f"356 TRIM SELECTED: {sorted(selected_trim)}")
+    if args.trim_audit:
+        print("356 TRIM AUDIT: candidate bounds recorded; placement and semantics not verified")
     if args.exterior_detail_preview:
         print(f"356 EXTERIOR DETAIL: optional candidates visible {sorted(DETAIL_ARTICLES)}; "
               "placements and original decal shaders remain unverified")
