@@ -73,6 +73,14 @@ def main():
                     help="Additional Blender X translation for door group A")
     ap.add_argument("--door-b-x-offset", type=float, default=0.0,
                     help="Additional Blender X translation for door group B")
+    ap.add_argument("--wheel-preview", action="store_true",
+                    help="Show original 356 wheel articles at CRP metadata translations; no mirroring")
+    ap.add_argument("--front-wheel-x-offset", type=float, default=0.0)
+    ap.add_argument("--front-wheel-y-offset", type=float, default=0.0)
+    ap.add_argument("--front-wheel-z-offset", type=float, default=0.0)
+    ap.add_argument("--rear-wheel-x-offset", type=float, default=0.0)
+    ap.add_argument("--rear-wheel-y-offset", type=float, default=0.0)
+    ap.add_argument("--rear-wheel-z-offset", type=float, default=0.0)
     ap.add_argument("--all-visible", action="store_true",
                     help="Diagnostic mode: show every imported mesh, including alternatives")
     options = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -82,6 +90,11 @@ def main():
     if not args.door_preview and any((args.door_a_y_offset, args.door_b_y_offset,
                                       args.door_a_x_offset, args.door_b_x_offset)):
         ap.error("Door offsets require --door-preview")
+    if not args.wheel_preview and any((
+        args.front_wheel_x_offset, args.front_wheel_y_offset, args.front_wheel_z_offset,
+        args.rear_wheel_x_offset, args.rear_wheel_y_offset, args.rear_wheel_z_offset
+    )):
+        ap.error("Wheel offsets require --wheel-preview")
     batch = args.batch.expanduser().resolve()
     meta_path = args.metadata.expanduser().resolve()
     manifest = batch / "manifest.csv"
@@ -167,10 +180,31 @@ def main():
                         obj.location.y += delta_y
                         print(f"356 DOOR: group={group} article={index} has no CRP transform; "
                               "only user offsets applied")
+                if args.wheel_preview and index in WHEEL_CANDIDATES:
+                    axle = "front" if index in (22, 106) else "rear"
+                    delta = (
+                        (args.front_wheel_x_offset, args.front_wheel_y_offset,
+                         args.front_wheel_z_offset) if axle == "front" else
+                        (args.rear_wheel_x_offset, args.rear_wheel_y_offset,
+                         args.rear_wheel_z_offset)
+                    )
+                    if info.get("has_transform") == "1":
+                        tx, ty, tz = (float(info[k]) for k in ("tx", "ty", "tz"))
+                        obj.location = (tx + delta[0], tz + delta[1], ty + delta[2])
+                        obj["placement_status"] = "EXPERIMENTAL CRP wheel translation; orientation unverified"
+                    else:
+                        obj.location = delta
+                        obj["placement_status"] = "No CRP transform; offset only"
+                    print(f"356 WHEEL: article={index} axle={axle} "
+                          f"has_transform={info.get('has_transform', '?')} "
+                          f"position={tuple(round(v, 4) for v in obj.location)} "
+                          f"mesh_bbox_local={[(round(min(v[i] for v in obj.bound_box), 3), round(max(v[i] for v in obj.bound_box), 3)) for i in range(3)]}")
                 # Transform metadata is recorded, not blindly applied. Some
                 # CRP mesh buffers already encode world positions and others
                 # are local panel geometry; only a mesh-by-mesh review can tell.
-                display = args.all_visible or index in VISIBLE or (args.door_preview and index in DOOR_ARTICLES)
+                display = (args.all_visible or index in VISIBLE or
+                           (args.door_preview and index in DOOR_ARTICLES) or
+                           (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
                 obj.hide_render = not display
                 if index in GLASS:
@@ -200,6 +234,9 @@ def main():
             area.spaces.active.shading.type = "MATERIAL"
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
+    if args.wheel_preview:
+        print("356 WHEEL PREVIEW: 22/106 front and 23/107 rear are independently "
+              "positioned from CRP metadata when present; no assumed left/right mirroring")
     if args.door_preview:
         print("356 DOOR PREVIEW: candidates A=4/18/19/36/37/43 B=103/104/105/110/111/112; "
               "transforms provisional; compare both sides in Blender")
