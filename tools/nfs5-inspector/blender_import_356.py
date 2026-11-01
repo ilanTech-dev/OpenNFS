@@ -75,6 +75,8 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-face-only", action="store_true",
+                    help="Apply wheel image only to candidate circular UV faces; dark material elsewhere")
     ap.add_argument("--wheel-uv-regions", action="store_true",
                     help="Debug: colour wheel face UV island cyan and upper rectangular island magenta")
     ap.add_argument("--wheel-uv-region-v", type=float, default=0.50,
@@ -104,6 +106,10 @@ def main():
         ap.error("Door offsets require --door-preview")
     if (args.wheel_uv_directory or args.wheel_texture) and not args.wheel_preview:
         ap.error("Wheel UV/textures require --wheel-preview")
+    if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
+        ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
+    if args.wheel_face_only and args.wheel_uv_regions:
+        ap.error("Choose one of --wheel-face-only and --wheel-uv-regions")
     if args.wheel_uv_regions and (not args.wheel_preview or not args.wheel_uv_directory):
         ap.error("--wheel-uv-regions requires --wheel-preview and --wheel-uv-directory")
     if not 0 < args.wheel_uv_region_v < 1:
@@ -287,13 +293,18 @@ def main():
                            (args.wheel_preview and index in WHEEL_CANDIDATES))
                 obj.hide_set(not display)
                 obj.hide_render = not display
-                if index in WHEEL_CANDIDATES and args.wheel_uv_regions:
+                if index in WHEEL_CANDIDATES and (args.wheel_uv_regions or args.wheel_face_only):
                     mesh = obj.data
                     if not mesh.uv_layers:
                         raise RuntimeError(f"Wheel article {index}: no UV layer in {source}")
                     mesh.materials.clear()
-                    for region in region_mats:
-                        mesh.materials.append(region)
+                    if args.wheel_face_only:
+                        mesh.materials.append(wheel_mat)
+                        mesh.materials.append(rubber)
+                        mesh.materials.append(rubber)
+                    else:
+                        for region in region_mats:
+                            mesh.materials.append(region)
                     uv_data = mesh.uv_layers.active.data
                     totals = [0, 0, 0]
                     for polygon in mesh.polygons:
@@ -307,7 +318,7 @@ def main():
                             group = 2
                         polygon.material_index = group
                         totals[group] += 1
-                    print(f"356 WHEEL UV REGIONS: article={index} total={len(mesh.polygons)} "
+                    print(f"356 WHEEL UV {'FACE-ONLY' if args.wheel_face_only else 'REGIONS'}: article={index} total={len(mesh.polygons)} "
                           f"circular={totals[0]} strip={totals[1]} crossing={totals[2]} "
                           f"threshold_V={args.wheel_uv_region_v:.3f}")
                 elif index in WHEEL_CANDIDATES and wheel_mat:
@@ -342,6 +353,8 @@ def main():
             area.spaces.active.shading.type = "MATERIAL"
     print(f"356 FIRST PASS: {imported} Blender meshes imported, {len(missing)} absent.")
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
+    if args.wheel_face_only:
+        print("356 WHEEL FACE-ONLY: circular UV candidates use wheel artwork; other faces use provisional dark material")
     if args.wheel_uv_regions:
         print("356 WHEEL UV REGIONS: UV-space diagnostic colours ONLY; material semantics unverified")
     if wheel_uv_dir:
