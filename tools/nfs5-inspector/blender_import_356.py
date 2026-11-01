@@ -66,6 +66,15 @@ def main():
                     help="Show wiper, badges/decals and antenna candidates (transforms unverified)")
     ap.add_argument("--light-uv-directory", type=Path,
                     help="Optional UV OBJ directory for articles 8/9/21 from --article-uv-mesh")
+    ap.add_argument("--headlight-uv-scale", type=float, default=5.7)
+    ap.add_argument("--aux-light-uv-scale", type=float, default=1.0)
+    ap.add_argument("--rear-light-uv-scale", type=float, default=1.0)
+    ap.add_argument("--headlight-uv-offset-u", type=float, default=0.0)
+    ap.add_argument("--headlight-uv-offset-v", type=float, default=0.0)
+    ap.add_argument("--aux-light-uv-offset-u", type=float, default=0.0)
+    ap.add_argument("--aux-light-uv-offset-v", type=float, default=0.0)
+    ap.add_argument("--rear-light-uv-offset-u", type=float, default=0.0)
+    ap.add_argument("--rear-light-uv-offset-v", type=float, default=0.0)
     ap.add_argument("--light-texture-directory", type=Path,
                     help="Optional extracted PNG directory for experimental original 356 light materials")
     ap.add_argument("--bonnet-y-offset", type=float, default=1.21,
@@ -132,6 +141,8 @@ def main():
                     help="Diagnostic mode: show every imported mesh, including alternatives")
     options = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = ap.parse_args(options)
+    if any(v <= 0 for v in (args.headlight_uv_scale, args.aux_light_uv_scale, args.rear_light_uv_scale)):
+        ap.error("Light UV scales must be positive")
     if args.light_texture_directory and not args.light_uv_directory:
         ap.error("--light-texture-directory requires --light-uv-directory")
     if not args.panel_transform_preview and (args.bonnet_y_offset != 1.21 or args.decklid_y_offset != -2.23):
@@ -248,6 +259,23 @@ def main():
             bsdf = mat.node_tree.nodes.get("Principled BSDF")
             tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
             tex.image = image
+            tex.extension = "CLIP"
+            controls = {
+                8: (args.headlight_uv_scale, args.headlight_uv_offset_u, args.headlight_uv_offset_v),
+                9: (args.aux_light_uv_scale, args.aux_light_uv_offset_u, args.aux_light_uv_offset_v),
+                21: (args.rear_light_uv_scale, args.rear_light_uv_offset_u, args.rear_light_uv_offset_v),
+            }
+            uv_scale, offset_u, offset_v = controls[article]
+            uv = mat.node_tree.nodes.new("ShaderNodeTexCoord")
+            mapping = mat.node_tree.nodes.new("ShaderNodeVectorMath")
+            mapping.operation = "SCALE"
+            mapping.inputs[3].default_value = uv_scale
+            offset = mat.node_tree.nodes.new("ShaderNodeVectorMath")
+            offset.operation = "ADD"
+            offset.inputs[1].default_value = (offset_u, offset_v, 0.0)
+            mat.node_tree.links.new(uv.outputs["UV"], mapping.inputs[0])
+            mat.node_tree.links.new(mapping.outputs["Vector"], offset.inputs[0])
+            mat.node_tree.links.new(offset.outputs["Vector"], tex.inputs["Vector"])
             mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
             mat.node_tree.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
             if hasattr(mat, "surface_render_method"):
@@ -653,7 +681,9 @@ def main():
     if light_uv_dir:
         print("356 LIGHT UV: using original article UV OBJ files for 8/9/21")
         if light_materials:
-            print("356 LIGHT TEXTURES: experimental original lit1/lit3/lit2 PNGs; mapping NOT verified")
+            print(f"356 LIGHT TEXTURES: UV scales head={args.headlight_uv_scale:g}, "
+                  f"aux={args.aux_light_uv_scale:g}, rear={args.rear_light_uv_scale:g}; "
+                  "original mapping NOT verified")
     if args.wheel_backing_hide:
         print("356 BACKING HIDE: diagnostic only — transparent shader on two identified square faces per wheel")
     if args.wheel_radial_audit:
