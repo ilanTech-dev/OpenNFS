@@ -14,6 +14,7 @@ import csv
 from pathlib import Path
 import sys
 import math
+import bmesh
 
 import bpy
 
@@ -75,6 +76,8 @@ def main():
                     help="Additional Blender X translation for door group B")
     ap.add_argument("--wheel-uv-directory", type=Path,
                     help="Directory containing 22_WheelFront.obj, 23_WheelRear.obj, 106_WheelFront.obj, 107_WheelRear.obj exported with --wheel-uv-mesh")
+    ap.add_argument("--wheel-remove-backing", action="store_true",
+                    help="Remove only validated backing triangles 112/113 from 356 wheel Blender meshes")
     ap.add_argument("--wheel-backing-hide", action="store_true",
                     help="Diagnostic: hide only the two confirmed square backing triangles (112,113), preserving tyre")
     ap.add_argument("--wheel-radial-audit", action="store_true",
@@ -131,6 +134,10 @@ def main():
         ap.error("--wheel-tire-uv-scale must be positive")
     if args.wheel_face_only and (not args.wheel_texture or not args.wheel_uv_directory or not args.wheel_preview):
         ap.error("--wheel-face-only requires --wheel-texture, --wheel-uv-directory and --wheel-preview")
+    if args.wheel_remove_backing and (not args.wheel_preview or not args.wheel_uv_directory):
+        ap.error("--wheel-remove-backing requires --wheel-preview and --wheel-uv-directory")
+    if args.wheel_remove_backing and (args.wheel_backing_hide or args.wheel_radial_audit or args.wheel_tire_geometry_audit):
+        ap.error("--wheel-remove-backing conflicts with backing transparency and geometry audits")
     if args.wheel_backing_hide and (not args.wheel_preview or not args.wheel_uv_directory):
         ap.error("--wheel-backing-hide requires --wheel-preview and --wheel-uv-directory")
     if args.wheel_backing_hide and (args.wheel_radial_audit or args.wheel_uv_regions or args.wheel_tire_geometry_audit or args.wheel_strip_transparent):
@@ -484,6 +491,29 @@ def main():
                         polygon.material_index = slot
                     print(f"356 BACKING HIDE: article={index} only polygons 112/113 transparent; "
                           "original mesh/UV retained")
+                if args.wheel_remove_backing and index in WHEEL_CANDIDATES:
+                    mesh = obj.data
+                    if len(mesh.polygons) != 114:
+                        raise RuntimeError(f"356 wheel {index}: expected 114 triangles; got {len(mesh.polygons)}")
+                    # Validate this exact known quad before changing the Blender mesh.
+                    for face_id in (112, 113):
+                        face = mesh.polygons[face_id]
+                        radius = [math.hypot(mesh.vertices[k].co.y, mesh.vertices[k].co.z)
+                                  for k in face.vertices]
+                        axial = [mesh.vertices[k].co.x for k in face.vertices]
+                        if min(radius) < 0.44 or max(axial) - min(axial) > 0.0001:
+                            raise RuntimeError(f"356 wheel {index} face {face_id}: unexpected geometry; refusing cleanup")
+                    bm = bmesh.new()
+                    try:
+                        bm.from_mesh(mesh)
+                        bm.faces.ensure_lookup_table()
+                        bmesh.ops.delete(bm, geom=[bm.faces[112], bm.faces[113]], context="FACES")
+                        bm.to_mesh(mesh)
+                        mesh.update()
+                    finally:
+                        bm.free()
+                    obj["wheel_backing_cleanup"] = "Removed original polygons 112 and 113 in Blender only"
+                    print(f"356 WHEEL CLEANUP: article={index} removed=112,113 remaining={len(mesh.polygons)}")
                 imported += 1
 
     scene = bpy.context.scene
@@ -501,6 +531,8 @@ def main():
     print(f"356 FIRST PASS: initially visible article IDs: {sorted(VISIBLE)}")
     if args.wheel_strip_transparent:
         print("356 WHEEL STRIP: debug-only transparency on UV strip/crossing faces; original mesh untouched")
+    if args.wheel_remove_backing:
+        print("356 WHEEL CLEANUP: only verified square backing triangles removed in Blender; source OBJ untouched")
     if args.wheel_backing_hide:
         print("356 BACKING HIDE: diagnostic only — transparent shader on two identified square faces per wheel")
     if args.wheel_radial_audit:
