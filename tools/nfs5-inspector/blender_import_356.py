@@ -78,10 +78,10 @@ def main():
     ap.add_argument("--wheel-preview", action="store_true",
                     help="Show original 356 wheel articles at CRP metadata translations; no mirroring")
     ap.add_argument("--front-wheel-x-offset", type=float, default=0.0)
-    ap.add_argument("--front-wheel-y-offset", type=float, default=0.0)
+    ap.add_argument("--front-wheel-y-offset", type=float, default=0.16)
     ap.add_argument("--front-wheel-z-offset", type=float, default=0.0)
     ap.add_argument("--rear-wheel-x-offset", type=float, default=0.0)
-    ap.add_argument("--rear-wheel-y-offset", type=float, default=0.0)
+    ap.add_argument("--rear-wheel-y-offset", type=float, default=0.15)
     ap.add_argument("--rear-wheel-z-offset", type=float, default=0.0)
     ap.add_argument("--all-visible", action="store_true",
                     help="Diagnostic mode: show every imported mesh, including alternatives")
